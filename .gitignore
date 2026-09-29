@@ -1,0 +1,38 @@
+# Build output
+/build/
+/out/
+
+# Visual Studio / IDE
+/.vs/
+/.vscode/
+CMakeUserPresets.json
+*.user
+
+# CMake (in case of an accidental in-source configure)
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+
+# Build artifacts (redundant safety net outside /build/)
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.idb
+*.iobj
+*.ipdb
+*.tlog
+*.log
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Documentation & local dev history — intentionally kept local, not in Git.
+# See docs/START_HERE.md: phase docs/logs/snapshots are working notes
+# regenerated per session, not published sources.
+/docs/
+/documentation/
+/versions/

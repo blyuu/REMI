@@ -1,0 +1,74 @@
+#pragma once
+#include <remi/render/Camera.hpp>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace remi {
+struct Vertex { Vec3 position; Vec3 color; };
+struct RendererConfig {
+    void* nativeWindow = nullptr;
+    unsigned width = 1280, height = 720;
+    std::filesystem::path shaderFile;
+    std::string shaderSource; // Optional loaded source; includes unsupported in this path.
+    bool useWarp = false;
+    bool requestDebug = true;
+    bool requireDebug = false;
+    bool vsync = true;
+};
+class Mesh {
+public:
+    [[nodiscard]] bool IntersectsClip(const Matrix4& modelViewProjection) const noexcept;
+    ~Mesh();
+    Mesh(const Mesh&) = delete;
+    Mesh& operator=(const Mesh&) = delete;
+private:
+    friend class Renderer;
+    struct Impl;
+    Mesh();
+    std::unique_ptr<Impl> impl_;
+};
+struct FrameImage { unsigned width = 0, height = 0; std::vector<std::uint8_t> rgba; };
+struct ShutdownReport { bool debugValidated = false; unsigned liveChildren = 0; unsigned priorWarnings = 0; };
+struct DirectionalLight {
+    Vec3 direction{-.5f,-1,.4f}; // Direction in which light travels.
+    float intensity = 1;
+    Vec3 color{1,.96f,.88f};
+    float ambient = .18f;
+};
+[[nodiscard]] Matrix4 DirectionalShadowMatrix(Vec3 center, Vec3 direction, float extent = 16);
+class Renderer {
+public:
+    explicit Renderer(const RendererConfig& config);
+    ~Renderer();
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
+    [[nodiscard]] std::unique_ptr<Mesh> CreateMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
+    void Resize(unsigned width, unsigned height);
+    void BeginFrame(Vec3 clearColor = {.035f, .055f, .085f});
+    void Draw(const Mesh& mesh, const Matrix4& modelViewProjection);
+    void BeginShadow(const Matrix4& lightViewProjection);
+    void EndShadow();
+    void DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light);
+    void Present();
+    // Synchronous diagnostic readback. Call before Present; never in normal frame path.
+    [[nodiscard]] FrameImage Readback();
+    void SaveScreenshot(const std::filesystem::path& path);
+    [[nodiscard]] bool DebugLayerEnabled() const noexcept;
+    // Returns count of corruption/error/warning messages and logs each. Clears queue.
+    [[nodiscard]] unsigned CheckDiagnostics();
+    [[nodiscard]] std::size_t LiveMeshes() const noexcept;
+    // Release Mesh owners first. Releases renderer resources, then audits D3D live objects.
+    // Renderer cannot draw after this call. Destruction remains safe without explicit audit.
+    [[nodiscard]] ShutdownReport ShutdownAndValidate();
+    [[nodiscard]] unsigned Width() const noexcept;
+    [[nodiscard]] unsigned Height() const noexcept;
+private:
+    void DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4& world, const DirectionalLight* light);
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+}
