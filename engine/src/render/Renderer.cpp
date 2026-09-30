@@ -52,25 +52,30 @@ struct DrawConstants {
     Vec3 direction; float intensity = 0;
     Vec3 color; float ambient = 0;
     float lit = 0, shadows = 0, bias = .0015f, padding = 0;
+    Vec3 cameraPosition; float padding2 = 0;
+    Vec3 materialTint{1,1,1}; float metallic = 0;
+    float roughness = .6f; float emissive = 0; float materialPadding[2]{};
 };
 struct GpuQuerySet {
     ComPtr<ID3D11Query> disjoint, start, shadowEnd, colorEnd;
     bool pending = false;
     std::uint64_t sequence = 0;
 };
-static_assert(sizeof(DrawConstants) == 240);
+static_assert(sizeof(DrawConstants) == 288);
 struct Mesh::Impl {
     LifetimeToken lifetime{OwnedKind::Mesh};
     ComPtr<ID3D11Buffer> vertices, indices;
     std::shared_ptr<DeviceOwnership> ownership;
     ID3D11Device* owner = nullptr;
-    UINT count = 0;
+    UINT count = 0, vertexCount = 0;
+    bool dynamic = false;
     Vec3 minimum, maximum;
     ~Impl() { if (ownership) --ownership->meshes; }
 };
 Mesh::Mesh() : impl_(std::make_unique<Impl>()) {}
 Mesh::~Mesh() = default;
 bool Mesh::IntersectsClip(const Matrix4& mvp) const noexcept {
+    if (impl_->dynamic) return true; // Animated bounds change; do not cull with the bind-pose box.
     unsigned common = 63;
     for (unsigned corner = 0; corner < 8; ++corner) {
         const float x = (corner & 1) ? impl_->maximum.x : impl_->minimum.x;
@@ -188,9 +193,10 @@ Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>(
     Check(r.device->CreatePixelShader(pixelCode->GetBufferPointer(), pixelCode->GetBufferSize(), nullptr, &r.ps), "Create PS");
     const D3D11_INPUT_ELEMENT_DESC elements[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0}};
-    static_assert(sizeof(Vertex) == 24 && offsetof(Vertex, color) == 12);
-    Check(r.device->CreateInputLayout(elements, 2, vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), &r.layout), "Create vertex layout");
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0}};
+    static_assert(sizeof(Vertex) == 36 && offsetof(Vertex, color) == 12 && offsetof(Vertex, normal) == 24);
+    Check(r.device->CreateInputLayout(elements, 3, vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), &r.layout), "Create vertex layout");
     D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = sizeof(DrawConstants); buffer.Usage = D3D11_USAGE_DYNAMIC;
     buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER; buffer.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
     static_assert(sizeof(Matrix4) == 64);
@@ -227,6 +233,12 @@ Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>(
 Renderer::~Renderer() = default;
 
 std::unique_ptr<Mesh> Renderer::CreateMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices) {
+    return CreateMeshInternal(vertices,indices,false);
+}
+std::unique_ptr<Mesh> Renderer::CreateDynamicMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices) {
+    return CreateMeshInternal(vertices,indices,true);
+}
+std::unique_ptr<Mesh> Renderer::CreateMeshInternal(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices, bool dynamic) {
     if (impl_->closed) throw std::logic_error("Renderer is shut down");
     if (vertices.empty() || indices.empty() || indices.size() % 3 != 0 ||
         vertices.size_bytes() > std::numeric_limits<UINT>::max() || indices.size_bytes() > std::numeric_limits<UINT>::max())
@@ -234,7 +246,8 @@ std::unique_ptr<Mesh> Renderer::CreateMesh(std::span<const Vertex> vertices, std
     for (auto index : indices) if (index >= vertices.size()) throw std::invalid_argument("Mesh index out of range");
     for (const auto& vertex : vertices)
         if (!std::isfinite(vertex.position.x) || !std::isfinite(vertex.position.y) || !std::isfinite(vertex.position.z) ||
-            !std::isfinite(vertex.color.x) || !std::isfinite(vertex.color.y) || !std::isfinite(vertex.color.z))
+            !std::isfinite(vertex.color.x) || !std::isfinite(vertex.color.y) || !std::isfinite(vertex.color.z) ||
+            !std::isfinite(vertex.normal.x) || !std::isfinite(vertex.normal.y) || !std::isfinite(vertex.normal.z))
             throw std::invalid_argument("Mesh contains non-finite values");
     auto mesh = std::unique_ptr<Mesh>(new Mesh());
     mesh->impl_->minimum = mesh->impl_->maximum = vertices.front().position;
@@ -248,11 +261,32 @@ std::unique_ptr<Mesh> Renderer::CreateMesh(std::span<const Vertex> vertices, std
         D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem = data;
         Check(impl_->device->CreateBuffer(&desc, &initial, &target), "Create mesh buffer");
     };
-    create(vertices.data(), static_cast<UINT>(vertices.size_bytes()), D3D11_BIND_VERTEX_BUFFER, mesh->impl_->vertices);
+    if (dynamic) {
+        D3D11_BUFFER_DESC desc{}; desc.ByteWidth = static_cast<UINT>(vertices.size_bytes());
+        desc.Usage = D3D11_USAGE_DYNAMIC; desc.BindFlags = D3D11_BIND_VERTEX_BUFFER; desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem = vertices.data();
+        Check(impl_->device->CreateBuffer(&desc,&initial,&mesh->impl_->vertices),"Create dynamic vertex buffer");
+    } else create(vertices.data(), static_cast<UINT>(vertices.size_bytes()), D3D11_BIND_VERTEX_BUFFER, mesh->impl_->vertices);
     create(indices.data(), static_cast<UINT>(indices.size_bytes()), D3D11_BIND_INDEX_BUFFER, mesh->impl_->indices);
-    mesh->impl_->count = static_cast<UINT>(indices.size()); mesh->impl_->owner = impl_->device.Get();
+    mesh->impl_->count = static_cast<UINT>(indices.size()); mesh->impl_->vertexCount = static_cast<UINT>(vertices.size());
+    mesh->impl_->dynamic = dynamic; mesh->impl_->owner = impl_->device.Get();
     mesh->impl_->ownership = impl_->ownership; ++impl_->ownership->meshes;
     return mesh;
+}
+void Renderer::UpdateMeshVertices(Mesh& mesh, std::span<const Vertex> vertices) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (mesh.impl_->owner != r.device.Get() || !mesh.impl_->dynamic || vertices.size() != mesh.impl_->vertexCount)
+        throw std::invalid_argument("Invalid dynamic mesh update");
+    for (const auto& vertex : vertices)
+        if (!std::isfinite(vertex.position.x) || !std::isfinite(vertex.position.y) || !std::isfinite(vertex.position.z) ||
+            !std::isfinite(vertex.color.x) || !std::isfinite(vertex.color.y) || !std::isfinite(vertex.color.z) ||
+            !std::isfinite(vertex.normal.x) || !std::isfinite(vertex.normal.y) || !std::isfinite(vertex.normal.z))
+            throw std::invalid_argument("Dynamic mesh contains non-finite values");
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    Check(r.context->Map(mesh.impl_->vertices.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped),"Map dynamic vertices");
+    std::memcpy(mapped.pData,vertices.data(),vertices.size_bytes());
+    r.context->Unmap(mesh.impl_->vertices.Get(),0);
 }
 void Renderer::Resize(unsigned width, unsigned height) {
     auto& r = *impl_;
@@ -287,33 +321,50 @@ void Renderer::BeginFrame(Vec3 color) {
     r.activeFrame = true;
 }
 void Renderer::Draw(const Mesh& mesh, const Matrix4& mvp) {
-    DrawInternal(mesh,mvp,Matrix4::Identity(),nullptr);
+    DrawInternal(mesh,mvp,Matrix4::Identity(),nullptr,{});
 }
 void Renderer::BeginShadow(const Matrix4& matrix) {
     for (const auto value : matrix.values) if (!std::isfinite(value)) throw std::invalid_argument("Invalid light matrix");
-    BeginFrame(); auto& r = *impl_; r.lightMatrix = matrix; r.shadowReady = false; r.shadowPass = true;
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (r.shadowPass) throw std::logic_error("Shadow pass already active");
+    r.lightMatrix = matrix; r.shadowReady = false;
     ID3D11ShaderResourceView* empty = nullptr; r.context->PSSetShaderResources(0,1,&empty);
     r.context->OMSetRenderTargets(0,nullptr,r.shadowDepth.Get());
     r.context->ClearDepthStencilView(r.shadowDepth.Get(),D3D11_CLEAR_DEPTH,1,0);
     const D3D11_VIEWPORT viewport{0,0,2048,2048,0,1}; r.context->RSSetViewports(1,&viewport);
     r.context->RSSetState(r.shadowRaster.Get());
+    r.context->OMSetDepthStencilState(r.depthState.Get(),0); r.context->OMSetBlendState(nullptr,nullptr,0xffffffff);
+    r.context->IASetInputLayout(r.layout.Get()); r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    r.context->VSSetShader(r.vs.Get(),nullptr,0); r.context->VSSetConstantBuffers(0,1,r.constants.GetAddressOf());
     r.context->PSSetShader(nullptr,nullptr,0);
+    r.activeFrame = true; r.shadowPass = true;
 }
 void Renderer::EndShadow() {
     if (!impl_->shadowPass) throw std::logic_error("EndShadow requires shadow pass");
     if (impl_->gpuActive >= 0) impl_->context->End(impl_->gpuQueries[impl_->gpuActive].shadowEnd.Get());
     impl_->shadowPass = false; BeginFrame(); impl_->shadowReady = true;
 }
-void Renderer::DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light) {
+void Renderer::DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light, const MaterialProperties& material) {
+    DrawLitPrepared(mesh,world,Multiply(world,viewProjection),light,material);
+}
+void Renderer::DrawLitPrepared(const Mesh& mesh, const Matrix4& world, const Matrix4& modelViewProjection, const DirectionalLight& light, const MaterialProperties& material) {
     const float length = light.direction.x*light.direction.x+light.direction.y*light.direction.y+light.direction.z*light.direction.z;
     if (!std::isfinite(length) || length < .00000001f || !std::isfinite(light.intensity) || light.intensity < 0 ||
         !std::isfinite(light.ambient) || light.ambient < 0 || !std::isfinite(light.color.x) || !std::isfinite(light.color.y) ||
-        !std::isfinite(light.color.z) || light.color.x < 0 || light.color.y < 0 || light.color.z < 0)
+        !std::isfinite(light.color.z) || light.color.x < 0 || light.color.y < 0 || light.color.z < 0 ||
+        !std::isfinite(light.cameraPosition.x) || !std::isfinite(light.cameraPosition.y) || !std::isfinite(light.cameraPosition.z))
         throw std::invalid_argument("Invalid directional light");
+    if (!std::isfinite(material.tint.x) || !std::isfinite(material.tint.y) || !std::isfinite(material.tint.z) ||
+        material.tint.x < 0 || material.tint.y < 0 || material.tint.z < 0 ||
+        !std::isfinite(material.metallic) || material.metallic < 0 || material.metallic > 1 ||
+        !std::isfinite(material.roughness) || material.roughness < .04f || material.roughness > 1 ||
+        !std::isfinite(material.emissive) || material.emissive < 0 || material.emissive > 2)
+        throw std::invalid_argument("Invalid material properties");
     if (impl_->shadowPass) throw std::logic_error("Lit draw inside shadow pass");
-    DrawInternal(mesh,Multiply(world,viewProjection),world,&light);
+    DrawInternal(mesh,modelViewProjection,world,&light,material);
 }
-void Renderer::DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4& world, const DirectionalLight* light) {
+void Renderer::DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4& world, const DirectionalLight* light, const MaterialProperties& material) {
     auto& r = *impl_;
     if (!r.activeFrame) throw std::logic_error("Draw requires BeginFrame");
     if (mesh.impl_->owner != r.device.Get()) throw std::invalid_argument("Mesh belongs to another device");
@@ -321,7 +372,10 @@ void Renderer::DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4&
     Check(r.context->Map(r.constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped), "Map constants");
     DrawConstants constants{}; constants.mvp = mvp; constants.world = world; constants.lightMatrix = r.lightMatrix;
     if (light) { constants.direction = light->direction; constants.intensity = light->intensity; constants.color = light->color;
-        constants.ambient = light->ambient; constants.lit = 1; constants.shadows = r.shadowReady ? 1.f : 0.f; }
+        constants.ambient = light->ambient; constants.cameraPosition = light->cameraPosition;
+        constants.lit = 1; constants.shadows = r.shadowReady ? 1.f : 0.f; }
+    constants.materialTint = material.tint; constants.metallic = material.metallic;
+    constants.roughness = material.roughness; constants.emissive = material.emissive;
     std::memcpy(mapped.pData, &constants, sizeof(constants)); r.context->Unmap(r.constants.Get(), 0);
     const UINT stride = sizeof(Vertex), offset = 0;
     r.context->IASetVertexBuffers(0, 1, mesh.impl_->vertices.GetAddressOf(), &stride, &offset);

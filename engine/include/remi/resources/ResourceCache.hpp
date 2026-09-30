@@ -37,6 +37,12 @@ public:
         const auto found = objects_.find(handle.id);
         return found == objects_.end() ? nullptr : found->second.get();
     }
+    // Main-thread updates for mutable resources such as dynamic meshes.
+    [[nodiscard]] T* GetMutable(Handle handle) noexcept {
+        if (handle.owner != owner_) return nullptr;
+        const auto found = objects_.find(handle.id);
+        return found == objects_.end() ? nullptr : found->second.get();
+    }
     bool Unload(Handle handle) {
         if (loading_) throw std::logic_error("Cannot unload during loading");
         if (!Get(handle)) return false;

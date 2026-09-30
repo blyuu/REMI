@@ -1,5 +1,6 @@
 #pragma once
 #include <remi/render/Camera.hpp>
+#include <remi/render/Material.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -8,7 +9,7 @@
 #include <vector>
 
 namespace remi {
-struct Vertex { Vec3 position; Vec3 color; };
+struct Vertex { Vec3 position; Vec3 color; Vec3 normal; };
 struct RendererConfig {
     void* nativeWindow = nullptr;
     unsigned width = 1280, height = 720;
@@ -39,6 +40,7 @@ struct DirectionalLight {
     float intensity = 1;
     Vec3 color{1,.96f,.88f};
     float ambient = .18f;
+    Vec3 cameraPosition{};
 };
 [[nodiscard]] Matrix4 DirectionalShadowMatrix(Vec3 center, Vec3 direction, float extent = 16);
 class Renderer {
@@ -48,12 +50,16 @@ public:
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
     [[nodiscard]] std::unique_ptr<Mesh> CreateMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
+    [[nodiscard]] std::unique_ptr<Mesh> CreateDynamicMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
+    void UpdateMeshVertices(Mesh& mesh, std::span<const Vertex> vertices);
     void Resize(unsigned width, unsigned height);
     void BeginFrame(Vec3 clearColor = {.035f, .055f, .085f});
     void Draw(const Mesh& mesh, const Matrix4& modelViewProjection);
     void BeginShadow(const Matrix4& lightViewProjection);
     void EndShadow();
-    void DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light);
+    void DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light, const MaterialProperties& material = {});
+    // Reuses the transform already computed for culling.
+    void DrawLitPrepared(const Mesh& mesh, const Matrix4& world, const Matrix4& modelViewProjection, const DirectionalLight& light, const MaterialProperties& material = {});
     void Present();
     void BeginGpuProfile(); // Start before BeginShadow/BeginFrame.
     void EndGpuProfile(); // End after final color draw, before Present.
@@ -71,7 +77,8 @@ public:
     [[nodiscard]] unsigned Width() const noexcept;
     [[nodiscard]] unsigned Height() const noexcept;
 private:
-    void DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4& world, const DirectionalLight* light);
+    [[nodiscard]] std::unique_ptr<Mesh> CreateMeshInternal(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices, bool dynamic);
+    void DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4& world, const DirectionalLight* light, const MaterialProperties& material);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

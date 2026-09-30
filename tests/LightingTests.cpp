@@ -26,8 +26,24 @@ int wmain(int argc,wchar_t** argv) {
         light.direction = {0,0,-1};
         renderer.BeginFrame(); renderer.DrawLit(*mesh,identity,identity,light); const auto dark = center(renderer.Readback()); renderer.Present();
         Check(bright > 190 && bright < 200 && dark > 59 && dark < 67,"Lambert direction or sRGB output incorrect");
+        auto smoothVertices = vertices;
+        for (auto& vertex : smoothVertices) vertex.normal = {0,1,0};
+        auto smoothMesh = renderer.CreateMesh(smoothVertices,indices);
+        light.direction = {0,0,1};
+        renderer.BeginFrame(); renderer.DrawLit(*smoothMesh,identity,identity,light);
+        const auto smooth = center(renderer.Readback()); renderer.Present();
+        Check(smooth > dark+10 && smooth < bright-10,"Smooth-normal character lighting did not affect pixels");
+        remi::MaterialProperties tinted{{.2f,.3f,.5f},.8f,.25f,0};
+        renderer.BeginFrame(); renderer.DrawLit(*smoothMesh,identity,identity,light,tinted);
+        const auto materialPixel = center(renderer.Readback()); renderer.Present();
+        Check(materialPixel < smooth-10,"Material selection did not change rendered pixels");
+        renderer.BeginFrame(); renderer.DrawLitPrepared(*mesh,identity,identity,light);
+        Check(center(renderer.Readback()) == bright,"Prepared lit transform changed output"); renderer.Present();
         light.direction = {0,0,1};
         renderer.BeginShadow(identity);
+        bool duplicateShadowRejected = false;
+        try { renderer.BeginShadow(identity); } catch (const std::logic_error&) { duplicateShadowRejected = true; }
+        Check(duplicateShadowRejected,"Nested shadow pass accepted");
         renderer.Draw(*mesh,remi::ModelMatrix({0,0,-.3f},0,{1,1,1}));
         renderer.EndShadow(); renderer.DrawLit(*mesh,identity,identity,light);
         const auto shadowed = center(renderer.Readback()); renderer.Present();
@@ -43,8 +59,12 @@ int wmain(int argc,wchar_t** argv) {
         renderer.BeginFrame(); const auto all = remi::DrawScene(renderer,scene,identity,resolver,&light,false);
         const auto withoutCulling = renderer.Readback(); renderer.Present();
         Check(culled.draws == 1 && culled.culled == 1 && all.draws == 2 && withCulling.rgba == withoutCulling.rgba,"Culling changed output");
+        scene.Get<remi::MeshComponent>(on)->material.tint = {.2f,1,1};
+        renderer.BeginFrame(); (void)remi::DrawScene(renderer,scene,identity,resolver,&light);
+        Check(center(renderer.Readback()) < center(withCulling)-30,"Scene material was not applied to mesh instance");
+        renderer.Present();
         Check(renderer.CheckDiagnostics() == 0,"D3D warnings");
-        mesh.reset(); const auto audit = renderer.ShutdownAndValidate();
+        mesh.reset(); smoothMesh.reset(); const auto audit = renderer.ShutdownAndValidate();
         Check(audit.liveChildren == 0 && audit.priorWarnings == 0,"Shadow resources leaked");
         std::cout << "Lambert pixels bright=" << static_cast<unsigned>(bright) << " ambient=" << static_cast<unsigned>(dark)
             << " shadow=" << static_cast<unsigned>(shadowed) << "; six planes passed; culling 2 -> 1 draws, identical pixels\n";

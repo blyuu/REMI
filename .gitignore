@@ -36,3 +36,6 @@ desktop.ini
 /docs/
 /documentation/
 /versions/
+
+# Locally exported Unreal template character; generated source binary.
+/assets/Quinn/*.rmc

@@ -1,7 +1,16 @@
 add_library(remi_gravity STATIC GravityGame.cpp)
 target_include_directories(remi_gravity PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(remi_gravity PUBLIC REMI::Physics PRIVATE remi_build_options)
-add_executable(REMIGravity main.cpp)
-target_link_libraries(REMIGravity PRIVATE remi_gravity REMI::DebugUI REMI::Runtime REMI::Renderer REMI::Resources remi_build_options)
+add_executable(REMIGravity main.cpp GameHud.cpp)
+target_link_libraries(REMIGravity PRIVATE remi_gravity REMI::DebugUI REMI::Runtime REMI::Renderer REMI::Resources remi_build_options gdi32)
 set_target_properties(REMIGravity PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>" VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:REMIGravity>")
 add_dependencies(REMIGravity remi_sandbox_shaders)
+if(EXISTS "${PROJECT_SOURCE_DIR}/assets/Quinn/quinn.rmc")
+    add_custom_command(TARGET REMIGravity POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:REMIGravity>/assets/Quinn"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/Quinn/quinn.rmc" "$<TARGET_FILE_DIR:REMIGravity>/assets/Quinn/quinn.rmc")
+endif()
+add_custom_command(TARGET REMIGravity POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/Pretendard-SemiBold.otf" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/Pretendard-SemiBold.otf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/LICENSE.txt" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/LICENSE.txt")

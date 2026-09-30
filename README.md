@@ -22,6 +22,12 @@ C++20 · DirectX 11 · CMake · 외부 의존성 없음
 
 REMI는 외부 엔진(Unreal/Unity) 없이 밑바닥부터 만드는 **Windows x64 / DirectX 11 게임 엔진**입니다.
 
+### 플레이 데모
+
+![REMI Gravity Run — 중력 반전, 코인 수집, 재질 변경과 완료 화면](media/gravity-run-demo.gif)
+
+Quinn 캐릭터로 중력을 반전해 천장의 코인 3개를 모으고 출구에 도착하는 실제 엔진 플레이입니다. GIF는 Release 빌드의 자동 플레이를 캡처한 6.9초 영상입니다.
+
 ---
 
 ## Key Features
@@ -34,9 +40,9 @@ REMI는 외부 엔진(Unreal/Unity) 없이 밑바닥부터 만드는 **Windows x
 | **Scene** | index+generation `EntityId`, 컴포넌트 저장, 부모 Transform — 오래된 핸들 참조를 generation 검증으로 거부 |
 | **Resources** | `ResourceManager`(파일 바이트 로딩) + 타입별 `ResourceCache<T>`(중복 로드 방지, 핸들 기반 공유) |
 | **Physics** | `PhysicsWorld` — 방향 전환 가능한 중력, 정적/동적 AABB 박스, semi-implicit Euler 적분, 8회 반복 접촉 보정, 접지(Supported) 판정. Scene만 의존, 게임 규칙과 분리 |
-| **Renderer (D3D11)** | 디바이스/스왑체인/깊이버퍼, `Camera`(궤도/이동), 방향광 Lambert 셰이딩, 단일 shadow map + PCF, 보수적 AABB 프러스텀 컬링, `SceneRenderer`로 Scene을 그대로 드로우 |
-| **Game — REMI Gravity** | 엔진 위에서 동작하는 3D 중력 반전 퍼즐 게임(`REMIGravity`). 바닥/천장을 오가며 목표 지점 도달, 승패 판정 |
-| **Testing** | CTest 기반 자동 회귀 13종(Core/Platform/Scene/Memory/Resources/Lighting/Physics/Game + 스모크 테스트) + ASan CPU 수명 검증 |
+| **Renderer (D3D11)** | 디바이스/스왑체인/깊이버퍼, 카메라, 방향광·그림자, 프러스텀 컬링, 메시별 색조·금속성·거칠기·발광 속성 |
+| **Game — REMI Gravity** | Quinn 대기/달리기, 중력 반전 코인 수집 맵, Silver/Original/Gold/Midnight 재질 선택, Pretendard HUD와 승패 화면 |
+| **Testing** | CTest 기반 자동 회귀 16종 + ASan CPU 수명 검증 |
 
 ---
 
@@ -60,7 +66,7 @@ ctest --preset release
 CMake가 PATH에 없다면 설치 경로의 `cmake.exe` / `ctest.exe`를 직접 사용하세요.
 생성된 `build/vs2022-x64/REMI.sln`을 Visual Studio 2022에서 열어도 됩니다. 시작 프로젝트는 `REMIGravity`입니다.
 
-실행 파일 위치: `build/vs2022-x64/bin/Debug/REMIGravity.exe` (`REMISandbox.exe`, `REMIBootstrap.exe`도 같은 위치). 셰이더는 빌드 시 EXE 옆 `shaders/` 폴더로 자동 복사됩니다.
+실행 파일 위치: `build/vs2022-x64/bin/Debug/REMIGravity.exe` (`REMISandbox.exe`, `REMIBootstrap.exe`도 같은 위치). 셰이더·Pretendard 폰트는 빌드 시 EXE 옆으로 자동 복사됩니다. 로컬 Quinn 에셋이 없다면 캐릭터는 박스로 표시됩니다.
 
 ### AddressSanitizer 빌드 (메모리/수명 검증)
 
@@ -76,13 +82,15 @@ ctest --preset asan
 
 ### REMIGravity — 중력 반전 게임
 
-바닥과 천장을 오가며 목표 지점(초록 패드)에 도달하는 3D 퍼즐입니다.
+바닥과 천장을 오가며 코인 3개를 모두 모은 뒤 초록 출구에 도달하는 3D 퍼즐입니다.
 
 | 입력 | 동작 |
 |---|---|
 | `W A S D` | 이동 |
 | `Space` | 접지 상태에서 중력 반전 |
+| `Q` | Quinn 재질 프리셋 선택 |
 | `Enter` | 재시작 |
+| `F2` | 성능 디버그 화면 표시/숨기기 |
 | 마우스 우클릭 드래그 | 카메라 궤도 |
 | 휠 | 줌 |
 | `F1` | 카메라 초기화 |
@@ -120,6 +128,8 @@ REMI/
 ├─ games/
 │  └─ gravity/                  중력 반전 퍼즐 게임 (REMIGravity)
 ├─ shaders/                     HLSL 셰이더 (Basic.hlsl)
+├─ assets/fonts/                Pretendard 폰트와 라이선스
+├─ media/                       README 플레이 데모 GIF
 ├─ tests/                       CTest 기반 회귀 테스트
 ├─ docs/                        설계·단계별 문서 (로컬 전용, Git 제외)
 ├─ versions/                    단계별 빌드/테스트 로그·소스 스냅샷 (로컬 전용, Git 제외)
@@ -139,4 +149,4 @@ REMI/
 | **빌드 시스템** | CMake ≥ 3.25 |
 | **플랫폼** | Windows x64 |
 | **외부 의존성** | 없음 — 표준 라이브러리 + Win32 + D3D11만 사용 |
-| **상태** | 진행 중 (v0.8.0) |
+| **상태** | 진행 중 (v0.10.5) |

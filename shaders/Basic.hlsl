@@ -6,11 +6,14 @@ cbuffer PerObject : register(b0)
     float3 g_LightDirection; float g_Intensity;
     float3 g_LightColor; float g_Ambient;
     float g_Lit; float g_Shadows; float g_Bias; float g_Padding;
+    float3 g_CameraPosition; float g_Padding2;
+    float3 g_MaterialTint; float g_Metallic;
+    float g_Roughness; float g_Emissive; float2 g_MaterialPadding;
 };
 Texture2D<float> g_Shadow : register(t0);
 SamplerComparisonState g_ShadowSampler : register(s0);
-struct VertexInput { float3 position : POSITION; float3 color : COLOR; };
-struct PixelInput { float4 position : SV_Position; float3 color : COLOR; float3 world : TEXCOORD0; float4 light : TEXCOORD1; };
+struct VertexInput { float3 position : POSITION; float3 color : COLOR; float3 normal : NORMAL; };
+struct PixelInput { float4 position : SV_Position; float3 color : COLOR; float3 world : TEXCOORD0; float4 light : TEXCOORD1; float3 normal : TEXCOORD2; };
 PixelInput VSMain(VertexInput input)
 {
     PixelInput output;
@@ -19,12 +22,15 @@ PixelInput VSMain(VertexInput input)
     float4 world = mul(float4(input.position,1),g_World);
     output.world = world.xyz;
     output.light = mul(world,g_LightMatrix);
+    output.normal = mul(input.normal,(float3x3)g_World);
     return output;
 }
 float4 PSMain(PixelInput input) : SV_Target
 {
-    // Geometric face normal in world space: flat shading, including non-uniform scale.
+    // Legacy meshes have no normals; animated characters supply smooth normals.
     float3 normal = normalize(cross(ddx(input.world),ddy(input.world)));
+    bool smooth = dot(input.normal,input.normal) > .01;
+    if (smooth) normal = normalize(input.normal);
     if (g_Lit < .5) return float4(input.color,1);
     float diffuse = saturate(dot(normal,-normalize(g_LightDirection)));
     float visibility = 1;
@@ -37,5 +43,17 @@ float4 PSMain(PixelInput input) : SV_Target
                 visibility += g_Shadow.SampleCmpLevelZero(g_ShadowSampler,uv+float2(x,y)/2048.0,light.z-g_Bias);
         visibility /= 9;
     }
-    return float4(input.color * (g_Ambient + g_LightColor*g_Intensity*diffuse*visibility),1);
+    if (!smooth)
+        return float4(input.color*g_MaterialTint * (g_Ambient + g_LightColor*g_Intensity*diffuse*visibility+g_Emissive),1);
+
+    // Soft sky fill and a restrained broad highlight keep pale armor readable.
+    float sky = .55 + .45*saturate(normal.y);
+    float fill = .14*saturate(dot(normal,normalize(float3(.45,.55,-.65))));
+    float3 view = normalize(g_CameraPosition-input.world);
+    float3 halfVector = normalize(-normalize(g_LightDirection)+view);
+    float glossPower = lerp(80,10,g_Roughness);
+    float highlight = lerp(.09,.55,g_Metallic)*pow(saturate(dot(normal,halfVector)),glossPower)*visibility;
+    float3 diffuseLight = g_Ambient*sky + fill*float3(.82,.90,1) + g_LightColor*g_Intensity*diffuse*visibility;
+    float3 albedo = lerp(input.color*g_MaterialTint,g_MaterialTint,g_Metallic*.7);
+    return float4(albedo*(diffuseLight*(1-.35*g_Metallic)+g_Emissive) + highlight*g_LightColor,1);
 }

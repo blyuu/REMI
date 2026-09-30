@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(REMI VERSION 0.9.0 LANGUAGES CXX)
+project(REMI VERSION 0.10.5 LANGUAGES CXX)
 
 if(NOT WIN32 OR NOT MSVC)
     message(FATAL_ERROR "REMI currently supports Windows with MSVC. Use the vs2022-x64 preset.")

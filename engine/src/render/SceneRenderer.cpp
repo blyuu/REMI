@@ -3,18 +3,18 @@
 namespace remi {
 SceneDrawStats DrawScene(Renderer& renderer, const Scene& scene, const Matrix4& viewProjection, const MeshResolver& resolve, const DirectionalLight* light, bool cull) {
     SceneDrawStats stats;
-    for (auto entity : scene.Entities()) {
+    scene.ForEachEntity([&](EntityId entity) {
         const auto* component = scene.Get<MeshComponent>(entity);
-        if (!component) continue;
-        if (!component->visible) { ++stats.hidden; continue; }
+        if (!component) return;
+        if (!component->visible) { ++stats.hidden; return; }
         const auto* mesh = resolve ? resolve(component->mesh) : nullptr;
-        if (!mesh) { ++stats.missing; continue; }
+        if (!mesh) { ++stats.missing; return; }
         const auto world = scene.WorldMatrix(entity); const auto mvp = Multiply(world,viewProjection);
-        if (cull && !mesh->IntersectsClip(mvp)) { ++stats.culled; continue; }
-        if (light) renderer.DrawLit(*mesh,world,viewProjection,*light);
+        if (cull && !mesh->IntersectsClip(mvp)) { ++stats.culled; return; }
+        if (light) renderer.DrawLitPrepared(*mesh,world,mvp,*light,component->material);
         else renderer.Draw(*mesh,mvp);
         ++stats.draws;
-    }
+    });
     return stats;
 }
 }

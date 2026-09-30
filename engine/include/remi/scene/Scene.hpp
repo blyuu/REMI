@@ -2,6 +2,7 @@
 #include <remi/core/Math.hpp>
 #include <remi/core/ResourceHandle.hpp>
 #include <remi/core/Lifetime.hpp>
+#include <remi/render/Material.hpp>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -27,6 +28,7 @@ struct TransformComponent {
 struct MeshComponent {
     MeshHandle mesh;
     bool visible = true;
+    MaterialProperties material{};
 };
 struct SceneMemory {
     std::size_t entities = 0, slots = 0, capacity = 0, reusable = 0, retired = 0;
@@ -47,6 +49,11 @@ public:
     [[nodiscard]] SceneMemory Memory() const noexcept;
     [[nodiscard]] std::size_t Size() const noexcept { return count_; }
     [[nodiscard]] std::vector<EntityId> Entities() const;
+    // Allocation-free traversal. Do not mutate the Scene from the visitor.
+    template<class Visitor> void ForEachEntity(Visitor&& visitor) const {
+        for (std::size_t index = 0; index < slots_.size(); ++index)
+            if (slots_[index].alive) visitor(Id(static_cast<std::uint32_t>(index)));
+    }
     [[nodiscard]] std::vector<EntityId> Children(EntityId parent) const;
     [[nodiscard]] std::string_view Name(EntityId id) const;
     void SetName(EntityId id, std::string name);

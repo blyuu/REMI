@@ -28,7 +28,7 @@ set_target_properties(remi_physics PROPERTIES FOLDER "Engine")
 target_link_libraries(remi_scene PUBLIC REMI::Core PRIVATE remi_build_options)
 set_target_properties(remi_scene PROPERTIES FOLDER "Engine")
 
-add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp src/render/SceneRenderer.cpp)
+add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp src/render/SceneRenderer.cpp src/render/BakedAnimation.cpp)
 add_library(REMI::Renderer ALIAS remi_renderer)
 target_link_libraries(remi_renderer PUBLIC REMI::Core REMI::Scene PRIVATE remi_build_options d3d11 dxgi d3dcompiler dxguid)
 set_target_properties(remi_renderer PROPERTIES FOLDER "Engine")
