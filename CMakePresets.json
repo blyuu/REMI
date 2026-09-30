@@ -20,11 +20,11 @@
   "buildPresets": [
     { "name": "debug", "configurePreset": "vs2022-x64", "configuration": "Debug" },
     { "name": "release", "configurePreset": "vs2022-x64", "configuration": "Release" },
-    { "name": "asan", "configurePreset": "vs2022-x64-asan", "configuration": "Debug", "targets": ["CoreTests", "SceneTests", "MemoryTests", "ResourceTests", "PhysicsTests"] }
+    { "name": "asan", "configurePreset": "vs2022-x64-asan", "configuration": "Debug", "targets": ["CoreTests", "SceneTests", "MemoryTests", "ResourceTests", "PhysicsTests", "GameTests"] }
   ],
   "testPresets": [
     { "name": "debug", "configurePreset": "vs2022-x64", "configuration": "Debug", "output": { "outputOnFailure": true } },
     { "name": "release", "configurePreset": "vs2022-x64", "configuration": "Release", "output": { "outputOnFailure": true } },
-    { "name": "asan", "configurePreset": "vs2022-x64-asan", "configuration": "Debug", "filter": { "include": { "name": "^(Phase1.Core|Phase3.Scene|Phase4.Memory|Phase5.Resources|Phase7.Physics)$" } }, "output": { "outputOnFailure": true } }
+    { "name": "asan", "configurePreset": "vs2022-x64-asan", "configuration": "Debug", "filter": { "include": { "name": "^(Phase1.Core|Phase3.Scene|Phase4.Memory|Phase5.Resources|Phase7.Physics|Phase8.Game)$" } }, "output": { "outputOnFailure": true } }
   ]
 }

@@ -53,6 +53,11 @@ struct DrawConstants {
     Vec3 color; float ambient = 0;
     float lit = 0, shadows = 0, bias = .0015f, padding = 0;
 };
+struct GpuQuerySet {
+    ComPtr<ID3D11Query> disjoint, start, shadowEnd, colorEnd;
+    bool pending = false;
+    std::uint64_t sequence = 0;
+};
 static_assert(sizeof(DrawConstants) == 240);
 struct Mesh::Impl {
     LifetimeToken lifetime{OwnedKind::Mesh};
@@ -116,6 +121,11 @@ struct Renderer::Impl {
     ComPtr<ID3D11ShaderResourceView> shadowView;
     ComPtr<ID3D11SamplerState> shadowSampler;
     ComPtr<ID3D11RasterizerState> shadowRaster;
+    std::array<GpuQuerySet,4> gpuQueries;
+    unsigned gpuNext = 0;
+    int gpuActive = -1;
+    GpuTimings lastGpuTimings;
+    std::uint64_t gpuSequence = 0, lastGpuSequence = 0;
     Matrix4 lightMatrix = Matrix4::Identity();
     bool shadowPass = false, shadowReady = false;
     ComPtr<ID3D11InfoQueue> diagnostics;
@@ -204,6 +214,15 @@ Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>(
     sampler.BorderColor[0] = sampler.BorderColor[1] = sampler.BorderColor[2] = sampler.BorderColor[3] = 1;
     sampler.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL; sampler.MaxLOD = D3D11_FLOAT32_MAX;
     Check(r.device->CreateSamplerState(&sampler,&r.shadowSampler),"Create shadow sampler");
+    D3D11_QUERY_DESC query{};
+    for (auto& set : r.gpuQueries) {
+        query.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+        Check(r.device->CreateQuery(&query,&set.disjoint),"Create GPU disjoint query");
+        query.Query = D3D11_QUERY_TIMESTAMP;
+        Check(r.device->CreateQuery(&query,&set.start),"Create GPU start query");
+        Check(r.device->CreateQuery(&query,&set.shadowEnd),"Create GPU shadow query");
+        Check(r.device->CreateQuery(&query,&set.colorEnd),"Create GPU color query");
+    }
 }
 Renderer::~Renderer() = default;
 
@@ -282,6 +301,7 @@ void Renderer::BeginShadow(const Matrix4& matrix) {
 }
 void Renderer::EndShadow() {
     if (!impl_->shadowPass) throw std::logic_error("EndShadow requires shadow pass");
+    if (impl_->gpuActive >= 0) impl_->context->End(impl_->gpuQueries[impl_->gpuActive].shadowEnd.Get());
     impl_->shadowPass = false; BeginFrame(); impl_->shadowReady = true;
 }
 void Renderer::DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light) {
@@ -317,6 +337,42 @@ void Renderer::Present() {
     if (result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET)
         Check(r.device->GetDeviceRemovedReason(), "D3D11 device removed");
     Check(result, "Present");
+}
+void Renderer::BeginGpuProfile() {
+    auto& r = *impl_;
+    if (r.closed || r.gpuActive >= 0) throw std::logic_error("GPU profile already active or renderer closed");
+    auto& set = r.gpuQueries[r.gpuNext];
+    if (set.pending) return; // GPU is behind; skip a sample without blocking.
+    r.gpuActive = static_cast<int>(r.gpuNext);
+    r.gpuNext = (r.gpuNext+1) % static_cast<unsigned>(r.gpuQueries.size());
+    r.context->Begin(set.disjoint.Get()); r.context->End(set.start.Get());
+}
+void Renderer::EndGpuProfile() {
+    auto& r = *impl_;
+    if (r.gpuActive < 0) return; // Begin skipped a busy query slot.
+    auto& set = r.gpuQueries[r.gpuActive];
+    r.context->End(set.colorEnd.Get()); r.context->End(set.disjoint.Get());
+    set.pending = true; set.sequence = ++r.gpuSequence; r.gpuActive = -1;
+}
+GpuTimings Renderer::PollGpuProfile() {
+    auto& r = *impl_;
+    if (r.closed) return {};
+    for (auto& set : r.gpuQueries) if (set.pending) {
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint{};
+        UINT64 start = 0, shadow = 0, color = 0;
+        constexpr UINT flags = D3D11_ASYNC_GETDATA_DONOTFLUSH;
+        if (r.context->GetData(set.disjoint.Get(),&disjoint,sizeof(disjoint),flags) != S_OK ||
+            r.context->GetData(set.start.Get(),&start,sizeof(start),flags) != S_OK ||
+            r.context->GetData(set.shadowEnd.Get(),&shadow,sizeof(shadow),flags) != S_OK ||
+            r.context->GetData(set.colorEnd.Get(),&color,sizeof(color),flags) != S_OK) continue;
+        set.pending = false;
+        if (set.sequence > r.lastGpuSequence && !disjoint.Disjoint && disjoint.Frequency && start <= shadow && shadow <= color) {
+            const double scale = 1000.0/static_cast<double>(disjoint.Frequency);
+            r.lastGpuTimings = {true,(shadow-start)*scale,(color-shadow)*scale,(color-start)*scale,set.sequence};
+            r.lastGpuSequence = set.sequence;
+        }
+    }
+    return r.lastGpuTimings;
 }
 FrameImage Renderer::Readback() {
     auto& r = *impl_;
@@ -374,6 +430,7 @@ ShutdownReport Renderer::ShutdownAndValidate() {
     r.context->ClearState(); r.context->Flush();
     r.constants.Reset(); r.layout.Reset(); r.vs.Reset(); r.ps.Reset(); r.raster.Reset(); r.depthState.Reset();
     r.shadowSampler.Reset(); r.shadowView.Reset(); r.shadowDepth.Reset(); r.shadowTexture.Reset(); r.shadowRaster.Reset();
+    for (auto& set : r.gpuQueries) { set.disjoint.Reset(); set.start.Reset(); set.shadowEnd.Reset(); set.colorEnd.Reset(); }
     r.rtv.Reset(); r.dsv.Reset(); r.backbuffer.Reset(); r.depth.Reset(); r.swap.Reset(); r.context.Reset();
     r.activeFrame = false; r.closed = true;
     if (debug) {

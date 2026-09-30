@@ -1,11 +1,16 @@
 #include "GravityGame.hpp"
+#include <remi/debug/DebugOverlay.hpp>
+#include <remi/core/Profiler.hpp>
 #include <remi/runtime/Application.hpp>
 #include <remi/render/SceneRenderer.hpp>
 #include <remi/resources/ResourceManager.hpp>
 #include <remi/core/Log.hpp>
+#include <remi/core/BuildInfo.hpp>
 #include <array>
 #include <cmath>
 #include <sstream>
+#include <fstream>
+#include <iomanip>
 
 std::unique_ptr<remi::Mesh> Box(remi::Renderer& renderer,remi::Vec3 color) {
     std::array<remi::Vertex,8> vertices{};
@@ -16,7 +21,9 @@ std::unique_ptr<remi::Mesh> Box(remi::Renderer& renderer,remi::Vec3 color) {
 class GravityApp final : public remi::Application {
 public:
     bool smoke = false, warp = false, failed = false;
+    unsigned profileFrames = 12;
     std::filesystem::path capture;
+    std::filesystem::path profileCsv;
     void OnStart(remi::Window& window) override {
         remi::ResourceManager files(remi::ExecutableDirectory());
         const auto shader = files.LoadFile("shaders/Basic.hlsl"); const auto& bytes = files.Get(shader)->bytes;
@@ -40,62 +47,123 @@ public:
             game->Restart();
         }
         renderer_ = std::move(renderer); meshes_ = std::move(meshes); game_ = std::move(game);
+        if (!profileCsv.empty()) {
+            csv_.open(profileCsv,std::ios::binary);
+            if (!csv_) throw std::runtime_error("Cannot open profile CSV");
+            csv_ << "# REMI 0.9.0," << (warp ? "WARP" : "HARDWARE") << ',' << config.width << 'x' << config.height
+                 << ",vsync=" << config.vsync << ",build=" << remi::GetBuildInfo().configuration << '\n';
+            csv_ << "frame,frame_ms,fps,cpu_physics_ms,cpu_shadow_ms,cpu_color_ms,cpu_present_ms,gpu_valid,gpu_sample_id,gpu_shadow_ms,gpu_color_ms,gpu_total_ms,shadow_draws,color_draws,culled,entities,bodies,contacts,scene_slot_bytes,meshes\n";
+        }
         camera_.yaw = -.25f; camera_.pitch = .22f; camera_.distance = 18;
         camera_.target = {-2,1.8f,0};
     }
     void OnResize(unsigned w,unsigned h) override { renderer_->Resize(w,h); }
     void OnFixedUpdate(remi::Window& window,const remi::Input& input,double dt) override {
         if (input.Pressed(remi::Key::Escape)) window.RequestClose();
+        const auto physicsStart = remi::CpuProfiler::Clock::now();
         game_->Tick({float(input.Held(remi::Key::D))-float(input.Held(remi::Key::A)),float(input.Held(remi::Key::W))-float(input.Held(remi::Key::S)),input.Pressed(remi::Key::Space),input.Pressed(remi::Key::Enter)},static_cast<float>(dt));
+        physicsMs_ += std::chrono::duration<double,std::milli>(remi::CpuProfiler::Clock::now()-physicsStart).count();
+        if (input.Pressed(remi::Key::F2)) { showDebug_ = !showDebug_; if (!showDebug_) overlay_.Clear(); overlayAge_ = 1; }
         if (input.Held(remi::Key::MouseRight)) camera_.Orbit(static_cast<float>(input.DeltaX()),static_cast<float>(input.DeltaY()));
         camera_.Zoom(input.Wheel());
         if (input.Pressed(remi::Key::F1)) { camera_.yaw = -.25f; camera_.pitch = .22f; camera_.distance = 18; }
     }
     void OnFrame(remi::Window& window,double elapsed,double) override {
+        profiler_.BeginFrame(); profiler_.Record(remi::CpuStage::Physics,physicsMs_); physicsMs_ = 0;
         const auto p = game_->Position();
         const float blend = 1-std::exp(-5*static_cast<float>(elapsed));
         camera_.target.x += (p.x*.35f-camera_.target.x)*blend;
         const auto vp = camera_.ViewProjection(float(renderer_->Width())/float(renderer_->Height()));
-        const remi::DirectionalLight light;
+        remi::DirectionalLight light; light.ambient = .38f;
         const auto lightVP = remi::DirectionalShadowMatrix({0,2,0},light.direction,24);
         const auto resolve = [&](remi::MeshHandle handle) { return meshes_->Get(handle); };
-        renderer_->BeginShadow(lightVP); (void)remi::DrawScene(*renderer_,game_->World(),lightVP,resolve); renderer_->EndShadow();
+        renderer_->BeginGpuProfile();
+        const auto shadowStart = remi::CpuProfiler::Clock::now();
+        renderer_->BeginShadow(lightVP); const auto shadowStats = remi::DrawScene(*renderer_,game_->World(),lightVP,resolve); renderer_->EndShadow();
+        profiler_.Add(remi::CpuStage::Shadow,shadowStart);
+        const auto colorStart = remi::CpuProfiler::Clock::now();
         const auto stats = remi::DrawScene(*renderer_,game_->World(),vp,resolve,&light);
+        profiler_.Add(remi::CpuStage::Color,colorStart);
         if (stats.missing || renderer_->CheckDiagnostics()) throw std::runtime_error("Game render validation failed");
+        overlayAge_ += elapsed;
+        if (showDebug_) {
+            if (overlayAge_ >= .2 || (smoke && frame_ == 4)) {
+                overlayAge_ = 0;
+                const auto cpu = profiler_.Snapshot(); const auto gpu = renderer_->PollGpuProfile();
+                const auto phys = game_->Physics(); const auto mem = game_->World().Memory();
+                std::vector<std::string> lines;
+                const auto line = [&](const auto& builder) { std::ostringstream out; out << std::fixed << std::setprecision(2); builder(out); lines.push_back(out.str()); };
+                lines.push_back("REMI DEBUG  F2 HIDE  0.9.0");
+                line([&](auto& o) { o << "FPS " << cpu.fps << " FRAME " << cpu.frameMs << " MS"; });
+                line([&](auto& o) { o << "CPU PHYS " << cpu.milliseconds[0] << " SHAD " << cpu.milliseconds[1] << " MS"; });
+                line([&](auto& o) { o << "CPU COLOR " << cpu.milliseconds[2] << " PRESENT " << cpu.milliseconds[3] << " MS"; });
+                line([&](auto& o) { if (gpu.valid) o << "GPU SHAD " << gpu.shadowMs << " COLOR " << gpu.colorMs << " MS"; else o << "GPU WAITING FOR SAMPLE"; });
+                line([&](auto& o) { o << "DRAW SHAD " << shadowStats.draws << " COLOR " << stats.draws << " CULL " << stats.culled; });
+                line([&](auto& o) { o << "ENTITY " << mem.entities << " BODY " << phys.bodies << " CONTACT " << phys.contacts; });
+                line([&](auto& o) { o << "SCENE SLOT " << mem.slotCapacityBytes << " B MESH " << meshes_->Size(); });
+                overlay_.Update(*renderer_,renderer_->Width(),renderer_->Height(),lines);
+            }
+            overlay_.Draw(*renderer_);
+        }
+        renderer_->EndGpuProfile();
         if (!capture.empty() && frame_ == 4) renderer_->SaveScreenshot(capture);
-        renderer_->Present(); ++frame_;
+        const auto presentStart = remi::CpuProfiler::Clock::now();
+        renderer_->Present(); profiler_.Add(remi::CpuStage::Present,presentStart);
+        profiler_.EndFrame(elapsed);
+        const auto cpu = profiler_.Snapshot(); const auto gpu = renderer_->PollGpuProfile();
+        if (csv_.is_open()) {
+            const auto phys = game_->Physics(); const auto mem = game_->World().Memory();
+            csv_ << std::fixed << std::setprecision(4) << frame_ << ',' << cpu.frameMs << ',' << cpu.fps << ','
+                 << cpu.milliseconds[0] << ',' << cpu.milliseconds[1] << ',' << cpu.milliseconds[2] << ',' << cpu.milliseconds[3] << ','
+                 << gpu.valid << ',' << gpu.sampleId << ',' << gpu.shadowMs << ',' << gpu.colorMs << ',' << gpu.totalMs << ','
+                 << shadowStats.draws << ',' << stats.draws << ',' << stats.culled << ',' << mem.entities << ','
+                 << phys.bodies << ',' << phys.contacts << ',' << mem.slotCapacityBytes << ',' << meshes_->Size() << '\n';
+            if (!csv_) throw std::runtime_error("Profile CSV write failed");
+        }
+        ++frame_;
         const auto state = game_->Status();
         std::wostringstream title;
         title << L"REMI Gravity | " << (state == remi::game::State::Won ? L"CLEAR! Enter to replay" : state == remi::game::State::Lost ? L"FELL! Enter to retry" : L"Reach the GREEN pad using the ceiling")
               << L" | Gravity " << (game_->Inverted() ? L"UP" : L"DOWN") << L" | " << (game_->Supported() ? L"Space: flip ready" : L"Airborne")
-              << L" | WASD move / Space flip / Enter restart / RMB camera / Wheel zoom / Esc";
+              << L" | WASD move / Space flip / Enter restart / F2 debug / RMB camera / Wheel zoom / Esc";
         window.SetTitle(title.str());
     }
     void OnStop() noexcept override {
-        game_.reset(); meshes_.reset();
+        overlay_.Clear(); game_.reset(); meshes_.reset();
         try { if (renderer_) { const auto audit = renderer_->ShutdownAndValidate(); failed = audit.liveChildren != 0 || audit.priorWarnings != 0;
             remi::Log("Game GPU shutdown: live children="+std::to_string(audit.liveChildren)+", warnings="+std::to_string(audit.priorWarnings)); } }
         catch (const std::exception& e) { failed = true; remi::Log(e.what()); }
         renderer_.reset();
+        if (csv_.is_open()) { csv_.flush(); if (!csv_) failed = true; csv_.close(); }
     }
 private:
     std::unique_ptr<remi::Renderer> renderer_;
     std::unique_ptr<remi::ResourceCache<remi::Mesh>> meshes_;
     std::unique_ptr<remi::game::GravityGame> game_;
     remi::Camera camera_;
+    remi::debug::DebugOverlay overlay_;
+    remi::CpuProfiler profiler_;
+    std::ofstream csv_;
+    double physicsMs_ = 0, overlayAge_ = 1;
+    bool showDebug_ = true;
     unsigned frame_ = 0;
 };
 int wmain(int argc,wchar_t** argv) {
     remi::RunConfig config; GravityApp app;
-    config.window.title = L"REMI Gravity | WASD move | Space flip | Enter restart";
+    config.window.title = L"REMI Gravity | WASD move | Space flip | Enter restart | F2 debug";
     config.window.graphicsSurface = true; config.idleWaitMilliseconds = 0;
     for (int i = 1; i < argc; ++i) {
         const std::wstring_view arg(argv[i]);
         if (arg == L"--smoke") app.smoke = true;
         else if (arg == L"--warp") app.warp = true;
         else if (arg == L"--capture" && i+1 < argc) app.capture = argv[++i];
+        else if (arg == L"--profile-csv" && i+1 < argc) app.profileCsv = argv[++i];
+        else if (arg == L"--profile-frames" && i+1 < argc) {
+            try { const auto value = std::stoul(argv[++i]); if (value < 12 || value > 10000) return 2; app.profileFrames = static_cast<unsigned>(value); app.smoke = true; }
+            catch (const std::exception&) { return 2; }
+        }
         else return 2;
     }
-    if (app.smoke) { config.window.visible = false; config.pauseWhenInactive = false; config.frameLimit = 12; }
+    if (app.smoke) { config.window.visible = false; config.pauseWhenInactive = false; config.frameLimit = app.profileFrames; }
     const int result = remi::RunApplication(app,config); return result ? result : (app.failed ? 1 : 0);
 }

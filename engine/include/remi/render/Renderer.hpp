@@ -33,6 +33,7 @@ private:
 };
 struct FrameImage { unsigned width = 0, height = 0; std::vector<std::uint8_t> rgba; };
 struct ShutdownReport { bool debugValidated = false; unsigned liveChildren = 0; unsigned priorWarnings = 0; };
+struct GpuTimings { bool valid = false; double shadowMs = 0, colorMs = 0, totalMs = 0; std::uint64_t sampleId = 0; };
 struct DirectionalLight {
     Vec3 direction{-.5f,-1,.4f}; // Direction in which light travels.
     float intensity = 1;
@@ -54,6 +55,9 @@ public:
     void EndShadow();
     void DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light);
     void Present();
+    void BeginGpuProfile(); // Start before BeginShadow/BeginFrame.
+    void EndGpuProfile(); // End after final color draw, before Present.
+    [[nodiscard]] GpuTimings PollGpuProfile(); // Nonblocking; last completed sample or invalid.
     // Synchronous diagnostic readback. Call before Present; never in normal frame path.
     [[nodiscard]] FrameImage Readback();
     void SaveScreenshot(const std::filesystem::path& path);

@@ -1,4 +1,8 @@
 add_executable(CoreTests CoreTests.cpp)
+add_executable(ProfileTests ProfileTests.cpp)
+target_link_libraries(ProfileTests PRIVATE REMI::DebugUI REMI::Platform remi_build_options)
+add_test(NAME Phase9.Profiler COMMAND ProfileTests "${PROJECT_SOURCE_DIR}/shaders/Basic.hlsl")
+set_tests_properties(Phase9.Profiler PROPERTIES TIMEOUT 60)
 add_executable(GameTests GameTests.cpp)
 target_link_libraries(GameTests PRIVATE remi_gravity remi_build_options)
 add_test(NAME Phase8.Game COMMAND GameTests)

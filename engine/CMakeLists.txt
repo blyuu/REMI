@@ -32,3 +32,7 @@ add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp s
 add_library(REMI::Renderer ALIAS remi_renderer)
 target_link_libraries(remi_renderer PUBLIC REMI::Core REMI::Scene PRIVATE remi_build_options d3d11 dxgi d3dcompiler dxguid)
 set_target_properties(remi_renderer PROPERTIES FOLDER "Engine")
+add_library(remi_debugui STATIC src/debug/DebugOverlay.cpp)
+add_library(REMI::DebugUI ALIAS remi_debugui)
+target_link_libraries(remi_debugui PUBLIC REMI::Renderer PRIVATE remi_build_options)
+set_target_properties(remi_debugui PROPERTIES FOLDER "Engine")

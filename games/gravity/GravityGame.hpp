@@ -10,6 +10,7 @@ public:
     void Restart();
     void Tick(Controls input, float dt);
     [[nodiscard]] const Scene& World() const noexcept { return *scene_; }
+    [[nodiscard]] PhysicsStats Physics() const noexcept { return physics_->Stats(); }
     [[nodiscard]] Vec3 Position() const { return scene_->Get<TransformComponent>(player_)->position; }
     [[nodiscard]] State Status() const noexcept { return state_; }
     [[nodiscard]] bool Supported() const noexcept { return physics_->Supported(player_); }
