@@ -38,6 +38,5 @@ Release/AddressSanitizer 빌드, Blender 변환 과정과 에셋 형식은 아�
 - [RenderingPipeline](docs/RenderingPipeline.md) — DirectX 11 초기화, 좌표 변환, 컬링, 그림자·색상 패스, 계측
 - [ShaderImplementation](docs/ShaderImplementation.md) — HLSL 조명 수식, 재질 변수와 시각 품질의 한계
 - [MemoryManagement](docs/MemoryManagement.md) — 객체 소유권, 핸들 무효화, 종료·누수 검증
-- [Phase별 설계 로그](docs/PhaseLogs.md) — Phase 0~10에서 선택한 구조, 검증 결과와 당시 한계
 
 코드의 출발점은 `engine/include/remi/`, `engine/src/`, `shaders/Basic.hlsl`, `games/gravity/`입니다. 현재 버전은 **0.11.0**입니다.
