@@ -30,12 +30,14 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# Publish portfolio documentation; keep phase notes and local snapshots private.
+# Publish technical docs and phase design logs; keep raw logs/snapshots private.
 /docs/*
 !/docs/Architecture.md
 !/docs/RenderingPipeline.md
 !/docs/ShaderImplementation.md
 !/docs/MemoryManagement.md
+!/docs/PhaseLogs.md
+!/docs/phase-*.md
 /documentation/
 /versions/
 
