@@ -30,12 +30,15 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
-# Documentation & local dev history — intentionally kept local, not in Git.
-# See docs/START_HERE.md: phase docs/logs/snapshots are working notes
-# regenerated per session, not published sources.
-/docs/
+# Publish portfolio documentation; keep phase notes and local snapshots private.
+/docs/*
+!/docs/Architecture.md
+!/docs/RenderingPipeline.md
+!/docs/ShaderImplementation.md
+!/docs/MemoryManagement.md
 /documentation/
 /versions/
 
 # Locally exported Unreal template character; generated source binary.
 /assets/Quinn/*.rmc
+/assets/characters/*.rmc

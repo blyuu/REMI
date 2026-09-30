@@ -1,4 +1,8 @@
 add_executable(CoreTests CoreTests.cpp)
+add_executable(CharacterAssetTests CharacterAssetTests.cpp)
+target_link_libraries(CharacterAssetTests PRIVATE REMI::Renderer remi_build_options)
+add_test(NAME Character.NamedClips COMMAND CharacterAssetTests)
+set_tests_properties(Character.NamedClips PROPERTIES TIMEOUT 15)
 if(EXISTS "${PROJECT_SOURCE_DIR}/assets/Quinn/quinn.rmc")
     add_executable(CharacterAnimationTests CharacterAnimationTests.cpp)
     target_link_libraries(CharacterAnimationTests PRIVATE REMI::Renderer REMI::Platform remi_build_options)

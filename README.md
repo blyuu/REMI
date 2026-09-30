@@ -1,152 +1,42 @@
-<div align="center">
+# REMI Engine
 
-<pre>
- ____   _____  __  __  ___
-|  _ \ | ____||  \/  ||_ _|
-| |_) ||  _|  | |\/| | | |
-|  _ < | |___ | |  | | | |
-|_| \_\|_____||_|  |_||___|
-</pre>
+**C++20 · DirectX 11 · HLSL · Windows x64**
 
-# REMI
+REMI는 렌더링, 장면, 리소스, 물리, 수명 관리를 직접 구현하며 확장하는 소형 게임 엔진입니다. `REMIGravity`는 엔진으로 만든 중력 반전 퍼즐 데모입니다. 천장의 코인 3개를 모아 출구에 도착하는 플레이를 확인할 수 있습니다.
 
-**Windows / DirectX 11 커스텀 게임 엔진 — 단계별 개발 프로젝트**
+![REMI Gravity Run 플레이 데모](media/gravity-run-demo.gif)
 
-C++20 · DirectX 11 · CMake · 외부 의존성 없음
+## 주요 기능
 
-</div>
+| 분야 | 현재 구현 |
+| --- | --- |
+| 렌더링 | D3D11 forward 렌더러, HLSL, 방향광, 2048² shadow map과 3×3 PCF, static mesh 프러스텀 컬링 |
+| 장면·리소스 | 계층 Transform, 세대 검증 EntityId, 핸들 기반 Mesh/파일 캐시 |
+| 캐릭터 | 이름 있는 베이크 애니메이션 클립, Blender 변환 도구, 실행 시 캐릭터 파일 선택 |
+| 게임·진단 | AABB 물리와 중력 반전 데모, Pretendard HUD, CPU/GPU 시간 CSV, D3D debug layer 검사 |
 
----
+현재 셰이더의 `metallic`·`roughness`는 **간이 조명 모델의 조정값**입니다. PBR·IBL·런타임 스켈레탈 스키닝이나 콘솔 지원을 구현했다고 주장하지 않습니다.
 
-## Overview
+## 실행
 
-REMI는 외부 엔진(Unreal/Unity) 없이 밑바닥부터 만드는 **Windows x64 / DirectX 11 게임 엔진**입니다.
-
-### 플레이 데모
-
-![REMI Gravity Run — 중력 반전, 코인 수집, 재질 변경과 완료 화면](media/gravity-run-demo.gif)
-
-Quinn 캐릭터로 중력을 반전해 천장의 코인 3개를 모으고 출구에 도착하는 실제 엔진 플레이입니다. GIF는 Release 빌드의 자동 플레이를 캡처한 6.9초 영상입니다.
-
----
-
-## Key Features
-
-| 모듈 | 설명 |
-|---|---|
-| **Core** | 시간(고정 tick 누적), 로그, 입력 상태, 수명(Lifetime) 유틸리티, 리소스 핸들, 공용 수학(`Math`) |
-| **Platform** | Win32 창 생성/이벤트/리사이즈, 입력 수집 |
-| **Runtime** | `Application` 기반 프레임 루프(입력 → 고정 tick → 렌더 → Present), 시스템 생성/종료 순서 관리 |
-| **Scene** | index+generation `EntityId`, 컴포넌트 저장, 부모 Transform — 오래된 핸들 참조를 generation 검증으로 거부 |
-| **Resources** | `ResourceManager`(파일 바이트 로딩) + 타입별 `ResourceCache<T>`(중복 로드 방지, 핸들 기반 공유) |
-| **Physics** | `PhysicsWorld` — 방향 전환 가능한 중력, 정적/동적 AABB 박스, semi-implicit Euler 적분, 8회 반복 접촉 보정, 접지(Supported) 판정. Scene만 의존, 게임 규칙과 분리 |
-| **Renderer (D3D11)** | 디바이스/스왑체인/깊이버퍼, 카메라, 방향광·그림자, 프러스텀 컬링, 메시별 색조·금속성·거칠기·발광 속성 |
-| **Game — REMI Gravity** | Quinn 대기/달리기, 중력 반전 코인 수집 맵, Silver/Original/Gold/Midnight 재질 선택, Pretendard HUD와 승패 화면 |
-| **Testing** | CTest 기반 자동 회귀 16종 + ASan CPU 수명 검증 |
-
----
-
-## Getting Started
-
-### 요구 환경
-
-Windows 10/11 x64, Visual Studio 2022(Desktop development with C++, Windows 10/11 SDK), CMake 3.25 이상.
-
-### 빌드 & 테스트
+Windows 10/11 x64, Visual Studio 2022의 C++ 데스크톱 도구와 Windows SDK, CMake 3.25 이상이 필요합니다.
 
 ```powershell
 cmake --preset vs2022-x64
 cmake --build --preset debug
 ctest --preset debug
-
-cmake --build --preset release
-ctest --preset release
+build\vs2022-x64\bin\Debug\REMIGravity.exe
 ```
 
-CMake가 PATH에 없다면 설치 경로의 `cmake.exe` / `ctest.exe`를 직접 사용하세요.
-생성된 `build/vs2022-x64/REMI.sln`을 Visual Studio 2022에서 열어도 됩니다. 시작 프로젝트는 `REMIGravity`입니다.
+`WASD` 이동, `Space` 중력 반전, `Q` 재질 프리셋, 우클릭 드래그 카메라 회전, 휠 확대/축소, `Enter` 재시작, `F2` 성능 표시, `Esc` 종료입니다. 로컬 캐릭터 에셋이 없으면 박스 캐릭터로 실행됩니다. 다른 베이크 캐릭터는 `--character <파일> --idle-clip <이름> --move-clip <이름>`으로 선택할 수 있습니다.
 
-실행 파일 위치: `build/vs2022-x64/bin/Debug/REMIGravity.exe` (`REMISandbox.exe`, `REMIBootstrap.exe`도 같은 위치). 셰이더·Pretendard 폰트는 빌드 시 EXE 옆으로 자동 복사됩니다. 로컬 Quinn 에셋이 없다면 캐릭터는 박스로 표시됩니다.
+Release/AddressSanitizer 빌드, Blender 변환 과정과 에셋 형식은 아래 기술 문서에 정리했습니다. 기본 실행 파일 외에 `REMISandbox` 렌더링·물리 데모와 `REMIBootstrap` 최소 실행 검증 앱이 있습니다.
 
-### AddressSanitizer 빌드 (메모리/수명 검증)
+## 기술 문서
 
-```powershell
-cmake --preset vs2022-x64-asan
-cmake --build --preset asan
-ctest --preset asan
-```
+- [Architecture](docs/Architecture.md) — 모듈 관계, 프레임 루프, 장면·리소스·캐릭터 경계
+- [RenderingPipeline](docs/RenderingPipeline.md) — DirectX 11 초기화, 좌표 변환, 컬링, 그림자·색상 패스, 계측
+- [ShaderImplementation](docs/ShaderImplementation.md) — HLSL 조명 수식, 재질 변수와 시각 품질의 한계
+- [MemoryManagement](docs/MemoryManagement.md) — 객체 소유권, 핸들 무효화, 종료·누수 검증
 
----
-
-## Usage
-
-### REMIGravity — 중력 반전 게임
-
-바닥과 천장을 오가며 코인 3개를 모두 모은 뒤 초록 출구에 도달하는 3D 퍼즐입니다.
-
-| 입력 | 동작 |
-|---|---|
-| `W A S D` | 이동 |
-| `Space` | 접지 상태에서 중력 반전 |
-| `Q` | Quinn 재질 프리셋 선택 |
-| `Enter` | 재시작 |
-| `F2` | 성능 디버그 화면 표시/숨기기 |
-| 마우스 우클릭 드래그 | 카메라 궤도 |
-| 휠 | 줌 |
-| `F1` | 카메라 초기화 |
-| `Esc` | 종료 |
-
-### REMISandbox — 렌더링/물리 데모
-
-회전 큐브, 바닥, 방향광 그림자, 박스 물리를 확인하는 데모입니다.
-
-| 입력 | 동작 |
-|---|---|
-| 마우스 우클릭 드래그 | 카메라 궤도 |
-| 휠 | 줌 |
-| `W A S D` | 이동 |
-| `Space` | 큐브 회전 정지/재개 |
-| `Q` / `E` | 자식 큐브 생성 / 마지막 생성 큐브 삭제 |
-| `Enter` | 물리 큐브 재낙하 |
-| `F1` | 카메라 초기화 |
-| `Esc` | 종료 |
-
-`REMIBootstrap`은 최소 빌드 확인용 EXE로, 별도 조작 없이 부트스트랩 성공 여부만 확인합니다.
-
----
-
-## Project Structure
-
-```
-REMI/
-├─ engine/                     엔진 코어 (정적 라이브러리 모음)
-│  ├─ include/remi/            공개 헤더 (core / platform / runtime / scene / resources / physics / render)
-│  └─ src/                     구현
-├─ apps/
-│  ├─ bootstrap/                최소 빌드 확인 EXE (REMIBootstrap)
-│  └─ sandbox/                  렌더링·물리 데모 EXE (REMISandbox)
-├─ games/
-│  └─ gravity/                  중력 반전 퍼즐 게임 (REMIGravity)
-├─ shaders/                     HLSL 셰이더 (Basic.hlsl)
-├─ assets/fonts/                Pretendard 폰트와 라이선스
-├─ media/                       README 플레이 데모 GIF
-├─ tests/                       CTest 기반 회귀 테스트
-├─ docs/                        설계·단계별 문서 (로컬 전용, Git 제외)
-├─ versions/                    단계별 빌드/테스트 로그·소스 스냅샷 (로컬 전용, Git 제외)
-├─ CMakeLists.txt
-└─ CMakePresets.json
-```
-
----
-
-## Requirements
-
-| | |
-|---|---|
-| **언어/표준** | C++20 |
-| **그래픽 API** | DirectX 11 |
-| **컴파일러** | MSVC (Visual Studio 2022) |
-| **빌드 시스템** | CMake ≥ 3.25 |
-| **플랫폼** | Windows x64 |
-| **외부 의존성** | 없음 — 표준 라이브러리 + Win32 + D3D11만 사용 |
-| **상태** | 진행 중 (v0.10.5) |
+코드의 출발점은 `engine/include/remi/`, `engine/src/`, `shaders/Basic.hlsl`, `games/gravity/`입니다. 현재 버전은 **0.11.0**입니다.

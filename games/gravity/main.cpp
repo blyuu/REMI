@@ -51,6 +51,8 @@ public:
     std::filesystem::path capture;
     std::filesystem::path profileCsv;
     std::filesystem::path demoDirectory;
+    std::filesystem::path characterFile;
+    std::string idleClip = "idle", moveClip = "run";
     void OnStart(remi::Window& window) override {
         remi::ResourceManager files(remi::ExecutableDirectory());
         const auto shader = files.LoadFile("shaders/Basic.hlsl"); const auto& bytes = files.Get(shader)->bytes;
@@ -61,14 +63,17 @@ public:
         auto renderer = std::make_unique<remi::Renderer>(config);
         auto meshes = std::make_unique<remi::ResourceCache<remi::Mesh>>();
         auto platform = meshes->Load("platform",[&] { return Box(*renderer,{.22f,.30f,.42f}); });
-        const auto characterFile = remi::ExecutableDirectory() / "assets/Quinn/quinn.rmc";
-        auto animation = std::filesystem::exists(characterFile) ? remi::BakedAnimation::Load(characterFile) : nullptr;
+        const auto selectedCharacter = characterFile.empty() ? remi::ExecutableDirectory() / "assets/characters/default.rmc" : characterFile;
+        if (!characterFile.empty() && !std::filesystem::exists(selectedCharacter)) throw std::runtime_error("Character asset not found: " + selectedCharacter.string());
+        auto animation = std::filesystem::exists(selectedCharacter) ? remi::BakedAnimation::Load(selectedCharacter) : nullptr;
+        if (animation && (!animation->HasClip(idleClip) || !animation->HasClip(moveClip)))
+            throw std::runtime_error("Character asset must contain selected idle and move clips");
         auto player = meshes->Load("player",[&] { return animation ? animation->CreateMesh(*renderer) : Box(*renderer,{1,.42f,.07f}); });
         auto goal = meshes->Load("goal",[&] { return Box(*renderer,{.05f,1,.25f}); });
         auto coin = meshes->Load("coin",[&] { return Coin(*renderer); });
         auto accent = meshes->Load("accent",[&] { return Box(*renderer,{.03f,.67f,.76f}); });
         auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr,coin,accent);
-        remi::Log(animation ? "Quinn mannequin: idle/run animation loaded" : "Quinn asset missing: using box player");
+        remi::Log(animation ? "Character asset loaded: " + selectedCharacter.string() + " (" + idleClip + ", " + moveClip + ")" : "No character asset: using box player");
         if (smoke) {
             if (previewFell) {
                 for (unsigned i = 0; i < 200; ++i) game->Tick({1,0},1.f/60);
@@ -90,7 +95,7 @@ public:
         if (!profileCsv.empty()) {
             csv_.open(profileCsv,std::ios::binary);
             if (!csv_) throw std::runtime_error("Cannot open profile CSV");
-            csv_ << "# REMI 0.10.5," << (warp ? "WARP" : "HARDWARE") << ',' << config.width << 'x' << config.height
+            csv_ << "# REMI 0.11.0," << (warp ? "WARP" : "HARDWARE") << ',' << config.width << 'x' << config.height
                  << ",vsync=" << config.vsync << ",build=" << remi::GetBuildInfo().configuration << '\n';
             csv_ << "frame,frame_ms,fps,cpu_physics_ms,cpu_shadow_ms,cpu_color_ms,cpu_present_ms,gpu_valid,gpu_sample_id,gpu_shadow_ms,gpu_color_ms,gpu_total_ms,shadow_draws,color_draws,culled,entities,bodies,contacts,scene_slot_bytes,meshes\n";
         }
@@ -135,7 +140,7 @@ public:
         remi::DirectionalLight light; light.ambient = .38f; light.cameraPosition = camera_.Position();
         const auto lightVP = remi::DirectionalShadowMatrix({0,2,0},light.direction,24);
         const auto resolve = [&](remi::MeshHandle handle) { return meshes_->Get(handle); };
-        if (animation_) animation_->Update(*renderer_,*meshes_->GetMutable(playerHandle_),running_,elapsed);
+        if (animation_) animation_->Update(*renderer_,*meshes_->GetMutable(playerHandle_),running_ ? moveClip : idleClip,elapsed);
         renderer_->BeginGpuProfile();
         const auto shadowStart = remi::CpuProfiler::Clock::now();
         renderer_->BeginShadow(lightVP); const auto shadowStats = remi::DrawScene(*renderer_,game_->World(),lightVP,resolve); renderer_->EndShadow();
@@ -154,7 +159,7 @@ public:
                 const auto phys = game_->Physics(); const auto mem = game_->World().Memory();
                 std::vector<std::string> lines;
                 const auto line = [&](const auto& builder) { std::ostringstream out; out << std::fixed << std::setprecision(2); builder(out); lines.push_back(out.str()); };
-                lines.push_back("REMI DEBUG  F2 HIDE  0.10.5");
+                lines.push_back("REMI DEBUG  F2 HIDE  0.11.0");
                 line([&](auto& o) { o << "FPS " << cpu.fps << " FRAME " << cpu.frameMs << " MS"; });
                 line([&](auto& o) { o << "CPU PHYS " << cpu.milliseconds[0] << " SHAD " << cpu.milliseconds[1] << " MS"; });
                 line([&](auto& o) { o << "CPU COLOR " << cpu.milliseconds[2] << " PRESENT " << cpu.milliseconds[3] << " MS"; });
@@ -224,6 +229,15 @@ private:
 };
 int wmain(int argc,wchar_t** argv) {
     remi::RunConfig config; GravityApp app;
+    const auto clipName = [](const wchar_t* raw) {
+        std::string name;
+        for (const wchar_t c : std::wstring_view(raw)) {
+            if (c > 127 || !((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z') ||
+                (c >= L'0' && c <= L'9') || c == L'_' || c == L'-') || name.size() >= 31) return std::string{};
+            name.push_back(static_cast<char>(c));
+        }
+        return name;
+    };
     config.window.title = L"REMI Gravity | WASD move | Space flip | Enter restart | F2 debug";
     config.window.graphicsSurface = true; config.idleWaitMilliseconds = 0;
     for (int i = 1; i < argc; ++i) {
@@ -235,6 +249,9 @@ int wmain(int argc,wchar_t** argv) {
         else if (arg == L"--capture" && i+1 < argc) app.capture = argv[++i];
         else if (arg == L"--profile-csv" && i+1 < argc) app.profileCsv = argv[++i];
         else if (arg == L"--record-demo" && i+1 < argc) app.demoDirectory = argv[++i];
+        else if (arg == L"--character" && i+1 < argc) app.characterFile = argv[++i];
+        else if (arg == L"--idle-clip" && i+1 < argc) { app.idleClip = clipName(argv[++i]); if (app.idleClip.empty()) return 2; }
+        else if (arg == L"--move-clip" && i+1 < argc) { app.moveClip = clipName(argv[++i]); if (app.moveClip.empty()) return 2; }
         else if (arg == L"--profile-frames" && i+1 < argc) {
             try { const auto value = std::stoul(argv[++i]); if (value < 12 || value > 10000) return 2; app.profileFrames = static_cast<unsigned>(value); app.smoke = true; }
             catch (const std::exception&) { return 2; }
