@@ -1,5 +1,6 @@
 #include "D3D11RHI.hpp"
 #include <dxgi.h>
+#include <dxgi1_2.h>
 #include <windows.h>
 #include <d3dcompiler.h>
 #include <sstream>
@@ -156,6 +157,86 @@ private:
     bool active_ = false;
     bool external_ = false;
 };
+class D3D11Surface final : public IRHISurface {
+public:
+    D3D11Surface(ID3D11Device* device, ID3D11DeviceContext* context, void* window, unsigned width, unsigned height)
+        : device_(device), context_(context) {
+        if (!window || !IsWindow(static_cast<HWND>(window))) throw std::invalid_argument("Surface requires a live HWND");
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgi;
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        Microsoft::WRL::ComPtr<IDXGIFactory2> factory;
+        Check(device_.As(&dxgi), "Query DXGI device");
+        Check(dxgi->GetAdapter(&adapter), "Get adapter");
+        Check(adapter->GetParent(IID_PPV_ARGS(&factory)), "Get DXGI factory");
+        DXGI_SWAP_CHAIN_DESC1 desc{};
+        desc.Width = width; desc.Height = height; desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        desc.SampleDesc.Count = 1; desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; desc.BufferCount = 2;
+        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        Check(factory->CreateSwapChainForHwnd(device_.Get(), static_cast<HWND>(window), &desc, nullptr, nullptr, &swap_), "Create swap chain");
+        Check(factory->MakeWindowAssociation(static_cast<HWND>(window), DXGI_MWA_NO_ALT_ENTER), "Disable DXGI fullscreen shortcut");
+        MakeTargets(width,height);
+    }
+    void Resize(unsigned width, unsigned height) override {
+        if (!width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+            throw std::invalid_argument("Invalid surface size");
+        context_->OMSetRenderTargets(0,nullptr,nullptr);
+        rtv_.Reset(); dsv_.Reset(); backbuffer_.Reset(); depth_.Reset();
+        Check(swap_->ResizeBuffers(0,width,height,DXGI_FORMAT_UNKNOWN,0), "Resize swap chain");
+        MakeTargets(width,height);
+    }
+    void BeginColorPass(const float clear[4]) override {
+        if (!clear) throw std::invalid_argument("Missing clear color");
+        context_->OMSetRenderTargets(1,rtv_.GetAddressOf(),dsv_.Get());
+        context_->ClearRenderTargetView(rtv_.Get(),clear);
+        context_->ClearDepthStencilView(dsv_.Get(),D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL,1,0);
+        const D3D11_VIEWPORT viewport{0,0,static_cast<float>(width_),static_cast<float>(height_),0,1};
+        context_->RSSetViewports(1,&viewport);
+        context_->OMSetBlendState(nullptr,nullptr,0xffffffff);
+    }
+    void Present(bool vsync) override {
+        const HRESULT result = swap_->Present(vsync ? 1 : 0,0);
+        if (result == DXGI_STATUS_OCCLUDED) { Sleep(16); return; }
+        if (result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET)
+            Check(device_->GetDeviceRemovedReason(), "D3D11 device removed");
+        Check(result,"Present");
+    }
+    TextureReadback Readback() override {
+        D3D11_TEXTURE2D_DESC desc{}; backbuffer_->GetDesc(&desc);
+        desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ; desc.MiscFlags = 0;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> staging;
+        Check(device_->CreateTexture2D(&desc,nullptr,&staging),"Create screenshot staging texture");
+        context_->CopyResource(staging.Get(),backbuffer_.Get());
+        TextureReadback result{width_,height_,std::vector<std::uint8_t>(static_cast<std::size_t>(width_)*height_*4)};
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        Check(context_->Map(staging.Get(),0,D3D11_MAP_READ,0,&mapped),"Map screenshot");
+        for (unsigned row=0;row<height_;++row)
+            std::memcpy(result.rgba.data()+static_cast<std::size_t>(row)*width_*4,
+                static_cast<const std::uint8_t*>(mapped.pData)+static_cast<std::size_t>(row)*mapped.RowPitch,
+                static_cast<std::size_t>(width_)*4);
+        context_->Unmap(staging.Get(),0);
+        return result;
+    }
+private:
+    void MakeTargets(unsigned width,unsigned height) {
+        Check(swap_->GetBuffer(0,IID_PPV_ARGS(&backbuffer_)),"Get swap buffer");
+        D3D11_RENDER_TARGET_VIEW_DESC view{};
+        view.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+        Check(device_->CreateRenderTargetView(backbuffer_.Get(),&view,&rtv_),"Create sRGB RTV");
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = width; desc.Height = height; desc.MipLevels = 1; desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; desc.SampleDesc.Count = 1; desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+        Check(device_->CreateTexture2D(&desc,nullptr,&depth_),"Create depth texture");
+        Check(device_->CreateDepthStencilView(depth_.Get(),nullptr,&dsv_),"Create DSV");
+        width_ = width; height_ = height;
+    }
+    Microsoft::WRL::ComPtr<ID3D11Device> device_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+    Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> backbuffer_,depth_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv_;
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilView> dsv_;
+    unsigned width_ = 0,height_ = 0;
+};
 }
 D3D11Buffer::D3D11Buffer(Microsoft::WRL::ComPtr<ID3D11Buffer> buffer, std::size_t size,
                          bool dynamic, ID3D11Device* owner)
@@ -303,4 +384,9 @@ std::unique_ptr<IRHIPipeline> D3D11Device::CreatePipeline(const PipelineDesc& de
     return pipeline;
 }
 
+std::unique_ptr<IRHISurface> D3D11Device::CreateSurface(void* nativeWindow, unsigned width, unsigned height) {
+    if (!width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
+        throw std::invalid_argument("Invalid surface size");
+    return std::make_unique<D3D11Surface>(device_.Get(),context_.Get(),nativeWindow,width,height);
+}
 }

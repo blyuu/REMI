@@ -4,9 +4,9 @@
 
 ## 초기화와 데이터
 
-RHI의 D3D11 구현이 디바이스·즉시 컨텍스트를 만들고, `Renderer`가 flip-discard swap chain, sRGB render-target view, depth/stencil buffer를 생성한다. `ShaderCache`가 HLSL의 `VSMain`과 Standard/Unlit/Toon `PSMain`을 컴파일한다. RHI 파이프라인이 입력 레이아웃·VS/PS·래스터·깊이 상태를 소유한다. Vertex는 위치·정점 색·노멀(float3)과 UV(float2)를 갖는다. Static mesh는 immutable vertex/index buffer, 애니메이션 mesh는 RHI가 `Map(WRITE_DISCARD)`으로 갱신하는 dynamic vertex buffer를 사용한다.
+RHI의 D3D11 구현이 디바이스·즉시 컨텍스트를 만들고, `IRHISurface`의 D3D11 구현이 flip-discard swap chain, sRGB render-target view, depth/stencil buffer를 생성한다. `ShaderCache`가 HLSL의 `VSMain`과 Standard/Unlit/Toon `PSMain`을 컴파일한다. RHI 파이프라인이 입력 레이아웃·VS/PS·래스터·깊이 상태를 소유한다. Vertex는 위치·정점 색·노멀(float3)과 UV(float2)를 갖는다. Static mesh는 immutable vertex/index buffer, 애니메이션 mesh는 RHI가 `Map(WRITE_DISCARD)`으로 갱신하는 dynamic vertex buffer를 사용한다.
 
-`IRHIDevice`는 버퍼·텍스처·파이프라인·오프스크린 타깃을 만들고 `IRHIContext`는 바인딩과 draw를 수행한다. 오프스크린 타깃은 진단용 RGBA 읽기도 지원한다. 기본 swap chain과 shadow map 생성·프레젠트·진단은 아직 `Renderer`의 D3D11 코드다. `ShaderCache`는 원본 파일 내용이 바뀌면 기존 VS/PS 조합을 먼저 다시 컴파일한다. `Renderer::ReloadShaders`가 새 RHI 파이프라인과 입력 레이아웃을 만들어 성공 시 교체한다. 입력 레이아웃은 컴파일된 VS 서명을 반사해 현재 Vertex의 POSITION/COLOR/NORMAL/TEXCOORD 매핑에서 필요한 항목을 선택한다. 새 의미 체계를 쓰려면 Vertex 구조와 매핑도 추가해야 한다. 게임은 파일을 1초마다 확인하며 `F5`로도 요청할 수 있다. 잘못된 HLSL 편집은 이전 파이프라인을 유지한다. 명시적 소스 교체는 `ReplaceShaderSource`를 사용한다. 소스 문자열 모드에서 `#include`는 지원하지 않으며, 파일 감시는 현재 주 HLSL 파일을 대상으로 한다.
+`IRHIDevice`는 버퍼·텍스처·파이프라인·오프스크린 타깃·창 표면을 만들고 `IRHIContext`는 바인딩과 draw를 수행한다. 오프스크린 타깃은 진단용 RGBA 읽기도 지원한다. `IRHISurface`가 기본 swap chain의 resize·clear·present·읽기를 맡는다. Shadow map 생성·GPU 계측·진단은 아직 `Renderer`의 D3D11 코드다. `ShaderCache`는 원본 파일 내용이 바뀌면 기존 VS/PS 조합을 먼저 다시 컴파일한다. `Renderer::ReloadShaders`가 새 RHI 파이프라인과 입력 레이아웃을 만들어 성공 시 교체한다. 입력 레이아웃은 컴파일된 VS 서명을 반사해 현재 Vertex의 POSITION/COLOR/NORMAL/TEXCOORD 매핑에서 필요한 항목을 선택한다. 새 의미 체계를 쓰려면 Vertex 구조와 매핑도 추가해야 한다. 게임은 파일을 1초마다 확인하며 `F5`로도 요청할 수 있다. 잘못된 HLSL 편집은 이전 파이프라인을 유지한다. 명시적 소스 교체는 `ReplaceShaderSource`를 사용한다. 소스 문자열 모드에서 `#include`는 지원하지 않으며, 파일 감시는 현재 주 HLSL 파일을 대상으로 한다.
 
 이 분리로 생긴 CPU 오버헤드와 셰이딩 모델별 GPU 비용은 아직 동일 조건에서 다시 측정하지 않았다. 과거 Phase 10 성능 수치를 이 변경의 결과로 인용하지 않는다.
 

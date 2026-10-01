@@ -29,7 +29,7 @@ flowchart TD
 | --- | --- | --- |
 | Core | 시간·입력 상태·수학·핸들·프로파일 데이터 | `engine/include/remi/core/` |
 | Platform | Win32 창, 메시지, 입력 수집 | `engine/src/platform/Window.cpp` |
-| Runtime | 창 수명과 고정 tick·프레임 콜백 | `engine/src/runtime/Application.cpp` |
+| Runtime | 창 수명, 고정 tick·프레임 콜백, Layer/Overlay 순서와 수명 | `engine/src/runtime/Application.cpp`, `engine/include/remi/runtime/Layer.hpp` |
 | Scene | EntityId, Transform 계층, MeshComponent | `engine/src/scene/Scene.cpp` |
 | Resources | 파일 로드와 타입별 캐시 | `engine/src/resources/ResourceManager.cpp`, `ResourceCache.hpp` |
 | Physics | Scene 기반 AABB 동역학·접촉 | `engine/src/physics/PhysicsWorld.cpp` |
@@ -38,9 +38,19 @@ flowchart TD
 | Assets | 런타임 glTF/GLB·PNG/JPEG·재질 파일, CPU 본 스키닝·상태 머신 | `engine/src/assets/`, `engine/src/animation/` |
 | DebugUI | 성능 오버레이 메시 | `engine/src/debug/DebugOverlay.cpp` |
 
-`REMIGravity`는 엔진 라이브러리를 사용하는 게임 사례다. 코인 수집, 중력 반전 조건, 승패 판정과 재질 프리셋은 게임 코드에 남긴다. `PhysicsWorld`는 게임 규칙을 모르고 Scene의 물체·중력·접촉만 다룬다.
+`REMIGravity`는 `GravityLayer`를 `Application`에 등록해 엔진 루프와 게임 코드를 분리한다. 일반 Layer가 먼저, Overlay가 나중에 갱신되며 종료 시 역순으로 detach한다. 코인 수집, 중력 반전 조건, 승패 판정과 재질 프리셋은 게임 코드에 남긴다. `PhysicsWorld`는 게임 규칙을 모르고 Scene의 물체·중력·접촉만 다룬다. 입력은 아직 폴링 방식이므로 Hazel의 역순 이벤트 전파까지 구현한 것은 아니다.
 
-`RHIFactory`가 D3D11/WARP 장치를 만들고, `IRHIDevice`가 버퍼·텍스처·파이프라인·오프스크린 타깃을 생성한다. `IRHIContext`가 파이프라인과 리소스 바인딩, 인덱스 드로, 오프스크린 패스를 담당한다. 게임의 기본 swap chain·shadow map 생성, 프레젠트, GPU 질의·진단은 여전히 `Renderer`의 D3D11 코드다. 기존 타깃을 사용하는 렌더 패스는 `BeginExternalPass` 경계로 RHI 명령을 사용한다. 따라서 다른 그래픽 API 지원에는 이 남은 플랫폼 타깃·진단 코드를 추가로 분리해야 한다.
+### 공개 Hazel 구조와의 비교
+
+| 경계 | 공개 Hazel | 현재 REMI |
+| --- | --- | --- |
+| 실행/게임 | `Application`이 LayerStack을 갱신하고 이벤트를 역순 전파한다. | `Application`이 Layer/Overlay를 소유하고 고정 tick·프레임 콜백을 호출한다. 게임은 `GravityLayer`에 있다. 이벤트 handled 전파는 아직 없다. |
+| 그래픽 API | `RendererAPI`의 명령 인터페이스와 OpenGL 구현을 분리한다. | `IRHIDevice`/`IRHIContext`/`IRHISurface`와 D3D11 구현을 분리한다. Shadow map과 GPU 진단에는 native D3D11 코드가 남아 있다. |
+| 물리/레벨 | 공개 Hazel의 Layer 구조와 별개의 영역이다. | `PhysicsWorld`가 AABB 충돌을 처리하고 게임 설정 파일이 물리·핵심 레벨 수치를 제공한다. |
+
+비교 기준: [Hazel Application](https://github.com/TheCherno/Hazel/blob/master/Hazel/src/Hazel/Core/Application.cpp), [LayerStack](https://github.com/TheCherno/Hazel/blob/master/Hazel/src/Hazel/Core/LayerStack.cpp), [RendererAPI](https://github.com/TheCherno/Hazel/blob/master/Hazel/src/Hazel/Renderer/RendererAPI.h). 공개 저장소의 RendererAPI는 OpenGL을 열거하며 DirectX 11 구현을 제공하지 않는다.
+
+`RHIFactory`가 D3D11/WARP 장치를 만들고, `IRHIDevice`가 버퍼·텍스처·파이프라인·오프스크린 타깃과 창 표면을 생성한다. `IRHIContext`가 파이프라인과 리소스 바인딩, 인덱스 드로, 오프스크린 패스를 담당한다. `IRHISurface`가 swap chain·기본 색/깊이 타깃·resize·present·스크린샷 읽기를 소유한다. Shadow map 생성, GPU 질의·진단은 아직 `Renderer`의 D3D11 코드다. 다른 그래픽 API를 지원하려면 이 남은 부분도 분리해야 한다.
 
 ## 빌드와 실행 경로
 
@@ -56,17 +66,17 @@ cmake --build --preset asan
 ctest --preset asan
 ```
 
-`REMIGravity.exe`는 `build/vs2022-x64/bin/<구성>/`에 생성된다. CMake는 셰이더·폰트를 실행 파일 옆으로 복사한다. 로컬 `assets/characters/default.rmc`가 있으면 기본 캐릭터로 복사하고, 없으면 로컬 Quinn v1 파일을 대신 사용할 수 있다. 둘 다 없으면 박스로 실행된다. 캐릭터 바이너리는 저장소에 포함하지 않는다.
+`REMIGravity.exe`는 `build/vs2022-x64/bin/<구성>/`에 생성된다. CMake는 `gravity.project.json`·셰이더·폰트를 실행 파일 옆으로 복사한다. 게임은 프로젝트 파일 위치를 기준으로 에셋 경로를 해석하고 `--project <파일>`로 다른 설정을 지정할 수 있다. 같은 파일에서 중력, 이동 속도, 발판, 코인, 시작점, 목표와 낙하 경계를 설정한다. 장식 메시 배치와 캐릭터 충돌 크기는 아직 게임 코드에 있다. 캐릭터 바이너리는 저장소에 포함하지 않는다.
 
 ## 프레임 흐름
 
 `RunApplication`이 Win32 이벤트를 처리한 다음 `FixedStepper`로 1/60초 tick을 누적한다. 한 프레임에서 최대 8 tick을 실행하고 0.25초를 넘는 큰 경과 시간은 잘라낸다. 그 뒤 `OnFrame`에서 애니메이션 갱신과 렌더링을 실행한다. 창이 비활성화되거나 최소화되어 일시 정지할 때 입력과 누적 시간을 초기화한다.
 
 ```text
-Win32 메시지/입력 → OnFixedUpdate(0~8회) → OnFrame(1회) → Present
+Win32 메시지/입력 → Application/Layer OnFixedUpdate(0~8회) → Application/Layer OnFrame(1회) → Present
 ```
 
-`GravityApp::OnStart`에서 셰이더 바이트와 메쉬 캐시, 렌더러, 게임 월드를 구성한다. `OnStop`에서는 게임·HUD·메시 소유자를 먼저 해제한 다음 렌더러의 D3D 잔존 객체를 검사한다. 소유권 세부 규칙은 [MemoryManagement.md](MemoryManagement.md)에 있다.
+`GravityLayer::OnAttach`에서 프로젝트 설정, 셰이더 바이트와 메쉬 캐시, 렌더러, 게임 월드를 구성한다. `OnDetach`에서는 게임·HUD·메시 소유자를 먼저 해제한 다음 렌더러의 D3D 잔존 객체를 검사한다. 소유권 세부 규칙은 [MemoryManagement.md](MemoryManagement.md)에 있다.
 
 ## 장면과 리소스 경계
 

@@ -1,11 +1,17 @@
 #include <GravityGame.hpp>
+#include <GameProject.hpp>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
 void Check(bool v,const char* message) { if (!v) throw std::runtime_error(message); }
-int main() {
+int main(int argc, char** argv) {
     try {
+        Check(argc == 2,"Project path required");
         using namespace remi::game;
+        const auto project = GameProject::Load(argv[1]);
+        Check(project.shader.filename() == "Basic.hlsl" && project.font.filename() == "Pretendard-SemiBold.otf" &&
+              std::abs(project.level.gravity-9.81f) < .001f && project.level.coinPositions.size() == 3,
+              "Project assets or level were not parsed");
         GravityGame game;
         Check(game.Supported() && game.Status() == State::Playing,"Invalid start");
         const auto old = game.World().Entities().front();

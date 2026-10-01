@@ -1,0 +1,23 @@
+{
+  "assets": {
+    "shader": "shaders/Basic.hlsl",
+    "character": "assets/characters/default.rmc",
+    "font": "assets/fonts/Pretendard-SemiBold.otf"
+  },
+  "level": {
+    "gravity": 9.81,
+    "moveSpeed": 4.0,
+    "physics": {"maxStepSeconds": 0.0333333333, "contactTolerance": 0.0001, "solverIterations": 8, "restitution": 0.0},
+    "playerSpawn": [-6, 0.4, 0],
+    "platforms": [
+      {"position": [-5, -0.25, 0], "halfExtent": [3, 0.25, 2]},
+      {"position": [5, -0.25, 0], "halfExtent": [3, 0.25, 2]},
+      {"position": [0, 4.25, 0], "halfExtent": [8, 0.25, 2]}
+    ],
+    "goalPosition": [6, 0.06, 0],
+    "goalHalfExtent": [0.8, 0.06, 0.8],
+    "coins": [[-3.5, 3.35, 0], [0, 3.35, 0], [3.5, 3.35, 0]],
+    "deathMin": [-10, -5, -5],
+    "deathMax": [10, 10, 5]
+  }
+}

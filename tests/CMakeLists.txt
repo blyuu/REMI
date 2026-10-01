@@ -28,7 +28,7 @@ add_test(NAME Phase9.Profiler COMMAND ProfileTests "${PROJECT_SOURCE_DIR}/shader
 set_tests_properties(Phase9.Profiler PROPERTIES TIMEOUT 60)
 add_executable(GameTests GameTests.cpp)
 target_link_libraries(GameTests PRIVATE remi_gravity remi_build_options)
-add_test(NAME Phase8.Game COMMAND GameTests)
+add_test(NAME Phase8.Game COMMAND GameTests "${PROJECT_SOURCE_DIR}/games/gravity/gravity.project.json")
 add_test(NAME Phase8.GameSmoke COMMAND REMIGravity --smoke --warp)
 set_tests_properties(Phase8.Game Phase8.GameSmoke PROPERTIES TIMEOUT 30)
 add_executable(PhysicsTests PhysicsTests.cpp)

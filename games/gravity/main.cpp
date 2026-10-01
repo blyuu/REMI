@@ -1,5 +1,6 @@
 #include "GravityGame.hpp"
 #include "GameHud.hpp"
+#include "GameProject.hpp"
 #include <remi/debug/DebugOverlay.hpp>
 #include <remi/core/Profiler.hpp>
 #include <remi/runtime/Application.hpp>
@@ -47,7 +48,7 @@ std::unique_ptr<remi::Mesh> Coin(remi::Renderer& renderer) {
     }
     return renderer.CreateMesh(vertices,indices);
 }
-class GravityApp final : public remi::Application {
+class GravityLayer final : public remi::Layer {
 public:
     bool smoke = false, warp = false, failed = false;
     bool previewFinish = false, previewFell = false;
@@ -56,20 +57,22 @@ public:
     std::filesystem::path profileCsv;
     std::filesystem::path demoDirectory;
     std::filesystem::path characterFile;
+    std::filesystem::path projectFile;
     std::string idleClip = "idle", moveClip = "run";
     bool idleClipExplicit = false, moveClipExplicit = false;
-    void OnStart(remi::Window& window) override {
+    void OnAttach(remi::Window& window) override {
+        const auto project = remi::game::GameProject::Load(projectFile.empty() ? remi::ExecutableDirectory() / "gravity.project.json" : projectFile);
         remi::ResourceManager files(remi::ExecutableDirectory());
-        const auto shader = files.LoadFile("shaders/Basic.hlsl"); const auto& bytes = files.Get(shader)->bytes;
+        const auto shader = files.LoadFile(project.shader); const auto& bytes = files.Get(shader)->bytes;
         if (bytes.empty()) throw std::runtime_error("Empty shader");
         remi::RendererConfig config; config.nativeWindow = window.NativeHandle(); config.width = window.Width(); config.height = window.Height();
-        config.shaderFile = remi::ExecutableDirectory() / "shaders/Basic.hlsl";
+        config.shaderFile = project.shader;
         config.useWarp = warp; config.vsync = !smoke && demoDirectory.empty();
         if (!demoDirectory.empty()) std::filesystem::create_directories(demoDirectory);
         auto renderer = std::make_unique<remi::Renderer>(config);
         auto meshes = std::make_unique<remi::ResourceCache<remi::Mesh>>();
         auto platform = meshes->Load("platform",[&] { return Box(*renderer,{.22f,.30f,.42f}); });
-        const auto selectedCharacter = characterFile.empty() ? remi::ExecutableDirectory() / "assets/characters/default.rmc" : characterFile;
+        const auto selectedCharacter = characterFile.empty() ? project.character : characterFile;
         if (!characterFile.empty() && !std::filesystem::exists(selectedCharacter)) throw std::runtime_error("Character asset not found: " + selectedCharacter.string());
         auto extension = selectedCharacter.extension().wstring();
         std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return std::towlower(c); });
@@ -108,7 +111,7 @@ public:
         auto goal = meshes->Load("goal",[&] { return Box(*renderer,{.05f,1,.25f}); });
         auto coin = meshes->Load("coin",[&] { return Coin(*renderer); });
         auto accent = meshes->Load("accent",[&] { return Box(*renderer,{.03f,.67f,.76f}); });
-        auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr || gltfAsset != nullptr,coin,accent);
+        auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr || gltfAsset != nullptr,coin,accent,project.level);
         remi::Log(gltfAsset ? "glTF character loaded: " + selectedCharacter.string() :
             animation ? "Character asset loaded: " + selectedCharacter.string() + " (" + idleClip + ", " + moveClip + ")" :
             "No character asset: using box player");
@@ -130,7 +133,7 @@ public:
         renderer_ = std::move(renderer); meshes_ = std::move(meshes); game_ = std::move(game);
         animation_ = std::move(animation); playerHandle_ = player;
         gltfAsset_ = std::move(gltfAsset);
-        hud_ = std::make_unique<GameHud>(remi::ExecutableDirectory() / "assets/fonts/Pretendard-SemiBold.otf");
+        hud_ = std::make_unique<GameHud>(project.font);
         if (!profileCsv.empty()) {
             csv_.open(profileCsv,std::ios::binary);
             if (!csv_) throw std::runtime_error("Cannot open profile CSV");
@@ -264,7 +267,7 @@ public:
               << L" | WASD move / Space flip / Q material / Enter restart / F2 debug / RMB camera / Wheel zoom / Esc";
         window.SetTitle(title.str());
     }
-    void OnStop() noexcept override {
+    void OnDetach() noexcept override {
         overlay_.Clear(); hud_.reset(); game_.reset(); animation_.reset(); gltfAsset_.reset(); meshes_.reset();
         try { if (renderer_) { const auto audit = renderer_->ShutdownAndValidate(); failed = audit.liveChildren != 0 || audit.priorWarnings != 0;
             remi::Log("Game GPU shutdown: live children="+std::to_string(audit.liveChildren)+", warnings="+std::to_string(audit.priorWarnings)); } }
@@ -293,7 +296,7 @@ private:
     unsigned demoTick_ = 0, nextDemoCaptureTick_ = 0, demoFrames_ = 0;
 };
 int wmain(int argc,wchar_t** argv) {
-    remi::RunConfig config; GravityApp app;
+    remi::RunConfig config; auto ownedLayer = std::make_unique<GravityLayer>(); auto& app = *ownedLayer;
     const auto clipName = [](const wchar_t* raw) {
         std::string name;
         for (const wchar_t c : std::wstring_view(raw)) {
@@ -315,6 +318,7 @@ int wmain(int argc,wchar_t** argv) {
         else if (arg == L"--profile-csv" && i+1 < argc) app.profileCsv = argv[++i];
         else if (arg == L"--record-demo" && i+1 < argc) app.demoDirectory = argv[++i];
         else if (arg == L"--character" && i+1 < argc) app.characterFile = argv[++i];
+        else if (arg == L"--project" && i+1 < argc) app.projectFile = argv[++i];
         else if (arg == L"--idle-clip" && i+1 < argc) { app.idleClip = clipName(argv[++i]); app.idleClipExplicit = true; if (app.idleClip.empty()) return 2; }
         else if (arg == L"--move-clip" && i+1 < argc) { app.moveClip = clipName(argv[++i]); app.moveClipExplicit = true; if (app.moveClip.empty()) return 2; }
         else if (arg == L"--profile-frames" && i+1 < argc) {
@@ -327,5 +331,6 @@ int wmain(int argc,wchar_t** argv) {
     if (!app.demoDirectory.empty() && app.smoke) return 2;
     if (app.smoke) { config.window.visible = false; config.pauseWhenInactive = false; config.frameLimit = app.profileFrames; }
     if (!app.demoDirectory.empty()) { config.window.visible = false; config.pauseWhenInactive = false; }
-    const int result = remi::RunApplication(app,config); return result ? result : (app.failed ? 1 : 0);
+    remi::Application application; application.PushLayer(std::move(ownedLayer));
+    const int result = remi::RunApplication(application,config); return result ? result : (app.failed ? 1 : 0);
 }

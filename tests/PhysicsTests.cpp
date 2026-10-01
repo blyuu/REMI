@@ -13,6 +13,22 @@ int main() {
             for (unsigned i = 0; i < 60; ++i) freeWorld.Step(1.f/60);
             Check(Near(freeWorld.Velocity(id).y,-9.81f) && Near(freeScene.Get<remi::TransformComponent>(id)->position.y,-4.98675f),"Semi-implicit fixed-step integration failed");
         }
+        {
+            remi::Scene customScene;
+            remi::PhysicsSettings settings; settings.gravity = {}; settings.restitution = 1; settings.solverIterations = 4;
+            remi::PhysicsWorld custom(customScene,settings);
+            const auto first = customScene.Create(); const auto second = customScene.Create();
+            customScene.Get<remi::TransformComponent>(first)->position.x = -1;
+            customScene.Get<remi::TransformComponent>(second)->position.x = 1;
+            remi::BodyDesc a{remi::BodyType::Dynamic}; a.velocity.x = 60; a.collisionLayer = 1; a.collisionMask = 2;
+            remi::BodyDesc b{remi::BodyType::Dynamic}; b.velocity.x = -60; b.collisionLayer = 2; b.collisionMask = 1;
+            custom.AddBody(first,a); custom.AddBody(second,b); custom.Step(1.f/120);
+            Check(Near(custom.Velocity(first).x,-60) && Near(custom.Velocity(second).x,60),"Configured elastic response failed");
+            custom.RemoveBody(second); customScene.Destroy(second);
+            const auto ignored = customScene.Create(); customScene.Get<remi::TransformComponent>(ignored)->position.x = 1;
+            b.collisionLayer = 4; custom.AddBody(ignored,b); custom.Step(1.f/120);
+            Check(custom.Contacts().empty(),"Collision mask did not filter body pair");
+        }
         remi::Scene scene; remi::PhysicsWorld physics(scene);
         const auto box = [&](remi::Vec3 p,remi::Vec3 extent,remi::BodyType type) {
             const auto id = scene.Create(); scene.Get<remi::TransformComponent>(id)->position = p;

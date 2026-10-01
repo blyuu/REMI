@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 void Check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 struct Probe final : remi::Application {
@@ -14,6 +15,13 @@ struct Probe final : remi::Application {
         if (fail) throw std::runtime_error("Expected frame failure");
     }
     void OnStop() noexcept override { ++stops; }
+};
+struct TraceLayer final : remi::Layer {
+    std::vector<int>& trace; int id; bool fail = false;
+    TraceLayer(std::vector<int>& trace, int id) : trace(trace), id(id) {}
+    void OnAttach(remi::Window&) override { trace.push_back(id); }
+    void OnFrame(remi::Window&, double, double) override { trace.push_back(id * 10); if (fail) throw std::runtime_error("Layer failure"); }
+    void OnDetach() noexcept override { trace.push_back(-id); }
 };
 int main() {
     try {
@@ -60,6 +68,21 @@ int main() {
         remi::RunConfig config; config.window.visible = false; config.pauseWhenInactive = false; config.frameLimit = 3;
         Probe success;
         Check(remi::RunApplication(success, config) == 0 && success.frames == 3 && success.stops == 1 && success.resizes == 1, "Runtime lifecycle failed");
+        std::vector<int> trace;
+        remi::Application layered;
+        layered.PushOverlay(std::make_unique<TraceLayer>(trace,3));
+        layered.PushLayer(std::make_unique<TraceLayer>(trace,1));
+        layered.PushLayer(std::make_unique<TraceLayer>(trace,2));
+        config.frameLimit = 1;
+        Check(remi::RunApplication(layered,config) == 0 &&
+              trace == std::vector<int>({1,2,3,10,20,30,-3,-2,-1}), "Layer/overlay order or cleanup failed");
+        trace.clear();
+        remi::Application failedLayer;
+        auto bad = std::make_unique<TraceLayer>(trace,2); bad->fail = true;
+        failedLayer.PushLayer(std::make_unique<TraceLayer>(trace,1)); failedLayer.PushLayer(std::move(bad));
+        Check(remi::RunApplication(failedLayer,config) == 1 &&
+              trace == std::vector<int>({1,2,10,20,-2,-1}), "Failed layer skipped reverse cleanup");
+        config.frameLimit = 3;
         Probe failure; failure.fail = true;
         Check(remi::RunApplication(failure, config) == 1 && failure.stops == 1, "Failed update skipped cleanup");
         Probe startup; startup.failStart = true;

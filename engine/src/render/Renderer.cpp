@@ -98,12 +98,9 @@ struct Renderer::Impl {
     // Shared bookkeeping only: a Mesh can report ownership until its own destruction.
     std::shared_ptr<DeviceOwnership> ownership = std::make_shared<DeviceOwnership>();
     std::unique_ptr<rhi::IRHIDevice> rhiDevice;
+    std::unique_ptr<rhi::IRHISurface> surface;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
-    ComPtr<IDXGISwapChain1> swap;
-    ComPtr<ID3D11Texture2D> backbuffer, depth;
-    ComPtr<ID3D11RenderTargetView> rtv;
-    ComPtr<ID3D11DepthStencilView> dsv;
     std::array<std::unique_ptr<rhi::IRHIPipeline>, static_cast<std::size_t>(ShadingModel::Count)> pipelines;
     std::unique_ptr<rhi::IRHIPipeline> shadowPipeline;
     std::unique_ptr<ShaderCache> shaderCache;
@@ -125,19 +122,6 @@ struct Renderer::Impl {
     bool closed = false;
     ShutdownReport shutdownReport;
     ~Impl() { if (context) { context->ClearState(); context->Flush(); } }
-    void MakeTargets(unsigned w, unsigned h) {
-        Check(swap->GetBuffer(0, IID_PPV_ARGS(&backbuffer)), "Get swap buffer");
-        D3D11_RENDER_TARGET_VIEW_DESC view{};
-        view.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; view.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-        Check(device->CreateRenderTargetView(backbuffer.Get(), &view, &rtv), "Create sRGB RTV");
-        D3D11_TEXTURE2D_DESC desc{};
-        desc.Width = w; desc.Height = h; desc.MipLevels = 1; desc.ArraySize = 1;
-        desc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; desc.SampleDesc.Count = 1;
-        desc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
-        Check(device->CreateTexture2D(&desc, nullptr, &depth), "Create depth texture");
-        Check(device->CreateDepthStencilView(depth.Get(), nullptr, &dsv), "Create DSV");
-        width = w; height = h;
-    }
     void BuildPipelines() {
         rhi::PipelineDesc desc;
         desc.vertexShader = shaderCache->Get({ShaderStage::Vertex});
@@ -166,18 +150,9 @@ Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>(
     if (backend.Info().debugLayer) Check(r.device.As(&r.diagnostics), "Query debug info queue");
     else if (config.requestDebug) Log("D3D11 debug layer unavailable; continuing without validation layer");
     Log(std::string("D3D11 FL11.0 / ") + (config.useWarp ? "WARP" : "hardware") + (r.diagnostics ? " / debug ON" : " / debug OFF"));
-    ComPtr<IDXGIDevice> dxgiDevice; ComPtr<IDXGIAdapter> adapter; ComPtr<IDXGIFactory2> factory;
-    Check(r.device.As(&dxgiDevice), "Query DXGI device");
-    Check(dxgiDevice->GetAdapter(&adapter), "Get adapter");
     Log("Adapter: " + backend.Info().adapterName);
-    Check(adapter->GetParent(IID_PPV_ARGS(&factory)), "Get DXGI factory");
-    DXGI_SWAP_CHAIN_DESC1 swap{};
-    swap.Width = config.width; swap.Height = config.height; swap.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    swap.SampleDesc.Count = 1; swap.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT; swap.BufferCount = 2;
-    swap.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    Check(factory->CreateSwapChainForHwnd(r.device.Get(), static_cast<HWND>(config.nativeWindow), &swap, nullptr, nullptr, &r.swap), "Create flip swap chain");
-    Check(factory->MakeWindowAssociation(static_cast<HWND>(config.nativeWindow), DXGI_MWA_NO_ALT_ENTER), "Disable DXGI fullscreen shortcut");
-    r.MakeTargets(config.width, config.height);
+    r.surface = r.rhiDevice->CreateSurface(config.nativeWindow,config.width,config.height);
+    r.width = config.width; r.height = config.height;
     r.shaderCache = std::make_unique<ShaderCache>(config.shaderFile, config.shaderSource);
     static_assert(sizeof(Vertex) == 44 && offsetof(Vertex, color) == 12 && offsetof(Vertex, normal) == 24 && offsetof(Vertex, uv) == 36);
     r.BuildPipelines();
@@ -266,22 +241,15 @@ void Renderer::Resize(unsigned width, unsigned height) {
     if (!width || !height || (width == r.width && height == r.height)) return;
     ValidateSize(width, height);
     r.activeFrame = false;
-    r.context->OMSetRenderTargets(0, nullptr, nullptr);
-    r.rtv.Reset(); r.dsv.Reset(); r.backbuffer.Reset(); r.depth.Reset();
-    Check(r.swap->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0), "ResizeBuffers");
-    r.MakeTargets(width, height);
+    r.surface->Resize(width,height);
+    r.width = width; r.height = height;
 }
 void Renderer::BeginFrame(Vec3 color) {
     auto& r = *impl_;
     if (r.closed) throw std::logic_error("Renderer is shut down");
     if (r.shadowPass) throw std::logic_error("End shadow pass before BeginFrame");
-    r.context->OMSetRenderTargets(1, r.rtv.GetAddressOf(), r.dsv.Get());
     const float clear[] = {color.x, color.y, color.z, 1};
-    r.context->ClearRenderTargetView(r.rtv.Get(), clear);
-    r.context->ClearDepthStencilView(r.dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
-    const D3D11_VIEWPORT viewport{0, 0, static_cast<float>(r.width), static_cast<float>(r.height), 0, 1};
-    r.context->RSSetViewports(1, &viewport);
-    r.context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    r.surface->BeginColorPass(clear);
     auto& commands = r.rhiDevice->Context();
     commands.BeginExternalPass();
     commands.SetPipeline(*r.pipelines[0]);
@@ -361,12 +329,8 @@ void Renderer::Present() {
     auto& r = *impl_;
     if (!r.activeFrame || r.shadowPass) throw std::logic_error("Present requires color pass");
     r.rhiDevice->Context().EndExternalPass();
-    const HRESULT result = r.swap->Present(r.vsync ? 1 : 0, 0);
+    r.surface->Present(r.vsync);
     r.activeFrame = false;
-    if (result == DXGI_STATUS_OCCLUDED) Sleep(16);
-    if (result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET)
-        Check(r.device->GetDeviceRemovedReason(), "D3D11 device removed");
-    Check(result, "Present");
 }
 bool Renderer::ReloadShaders() {
     auto& r = *impl_;
@@ -425,18 +389,8 @@ GpuTimings Renderer::PollGpuProfile() {
 FrameImage Renderer::Readback() {
     auto& r = *impl_;
     if (!r.activeFrame || r.shadowPass) throw std::logic_error("Readback requires color pass before Present");
-    D3D11_TEXTURE2D_DESC desc{}; r.backbuffer->GetDesc(&desc);
-    desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ; desc.MiscFlags = 0;
-    ComPtr<ID3D11Texture2D> staging;
-    Check(r.device->CreateTexture2D(&desc, nullptr, &staging), "Create screenshot staging texture");
-    r.context->CopyResource(staging.Get(), r.backbuffer.Get());
-    FrameImage image{r.width, r.height, std::vector<std::uint8_t>(static_cast<std::size_t>(r.width) * r.height * 4)};
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    Check(r.context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Map screenshot");
-    for (unsigned row = 0; row < r.height; ++row)
-        std::memcpy(image.rgba.data() + static_cast<std::size_t>(row) * r.width * 4,
-                    static_cast<const std::uint8_t*>(mapped.pData) + static_cast<std::size_t>(row) * mapped.RowPitch, static_cast<std::size_t>(r.width) * 4);
-    r.context->Unmap(staging.Get(), 0); return image;
+    auto readback = r.surface->Readback();
+    return {readback.width,readback.height,std::move(readback.rgba)};
 }
 void Renderer::SaveScreenshot(const std::filesystem::path& path) {
     auto image = Readback();
@@ -482,7 +436,7 @@ ShutdownReport Renderer::ShutdownAndValidate() {
     r.shaderCache.reset();
     r.shadowSampler.Reset(); r.shadowView.Reset(); r.shadowDepth.Reset(); r.shadowTexture.Reset();
     for (auto& set : r.gpuQueries) { set.disjoint.Reset(); set.start.Reset(); set.shadowEnd.Reset(); set.colorEnd.Reset(); }
-    r.rtv.Reset(); r.dsv.Reset(); r.backbuffer.Reset(); r.depth.Reset(); r.swap.Reset(); r.context.Reset();
+    r.surface.reset(); r.context.Reset();
     r.rhiDevice.reset();
     r.activeFrame = false; r.closed = true;
     if (debug) {

@@ -28,6 +28,15 @@ public:
     [[nodiscard]] virtual const IRHITexture& Color() const noexcept = 0;
 };
 class IRHIPipeline { public: virtual ~IRHIPipeline() = default; };
+// Window presentation belongs to the backend, not the scene renderer.
+class IRHISurface {
+public:
+    virtual ~IRHISurface() = default;
+    virtual void Resize(unsigned width, unsigned height) = 0;
+    virtual void BeginColorPass(const float clear[4]) = 0;
+    virtual void Present(bool vsync) = 0;
+    [[nodiscard]] virtual TextureReadback Readback() = 0;
+};
 class IRHIContext {
 public:
     virtual ~IRHIContext() = default;
@@ -57,6 +66,7 @@ public:
     [[nodiscard]] virtual std::unique_ptr<IRHITexture> CreateTexture(const TextureDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<IRHIRenderTarget> CreateRenderTarget(const RenderTargetDesc& desc) = 0;
     [[nodiscard]] virtual std::unique_ptr<IRHIPipeline> CreatePipeline(const PipelineDesc& desc) = 0;
+    [[nodiscard]] virtual std::unique_ptr<IRHISurface> CreateSurface(void* nativeWindow, unsigned width, unsigned height) = 0;
     [[nodiscard]] virtual IRHIContext& Context() noexcept = 0;
 protected:
     IRHIDevice() = default;

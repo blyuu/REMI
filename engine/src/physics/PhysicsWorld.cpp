@@ -8,6 +8,16 @@ bool Finite(Vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::is
 float& Axis(Vec3& v,unsigned a) { return a == 0 ? v.x : a == 1 ? v.y : v.z; }
 float Axis(const Vec3& v,unsigned a) { return a == 0 ? v.x : a == 1 ? v.y : v.z; }
 float Dot(Vec3 a,Vec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
+bool Collides(const BodyDesc& a, const BodyDesc& b) {
+    return (a.collisionMask & b.collisionLayer) && (b.collisionMask & a.collisionLayer);
+}
+}
+PhysicsWorld::PhysicsWorld(Scene& scene, PhysicsSettings settings) : scene_(scene), settings_(settings), gravity_(settings.gravity) {
+    if (!Finite(settings.gravity) || !std::isfinite(settings.maxStepSeconds) || settings.maxStepSeconds <= 0 ||
+        settings.maxStepSeconds > 1 || !std::isfinite(settings.contactTolerance) || settings.contactTolerance < 0 ||
+        settings.contactTolerance > .1f || settings.solverIterations == 0 || settings.solverIterations > 64 ||
+        !std::isfinite(settings.restitution) || settings.restitution < 0 || settings.restitution > 1)
+        throw std::invalid_argument("Invalid physics settings");
 }
 void PhysicsWorld::ValidateEntity(EntityId id) const {
     const auto* tr = scene_.Get<TransformComponent>(id);
@@ -18,6 +28,7 @@ void PhysicsWorld::AddBody(EntityId id,const BodyDesc& desc) {
     ValidateEntity(id);
     if (!Finite(desc.halfExtent) || desc.halfExtent.x <= 0 || desc.halfExtent.y <= 0 || desc.halfExtent.z <= 0 ||
         !Finite(desc.velocity) || !std::isfinite(desc.mass) || desc.mass < .000001f || desc.mass > 1000000 ||
+        desc.collisionLayer == 0 ||
         (desc.type == BodyType::Static && Dot(desc.velocity,desc.velocity) != 0) ||
         (desc.type != BodyType::Static && desc.type != BodyType::Dynamic)) throw std::invalid_argument("Invalid body description");
     for (const auto& body : bodies_) if (body.entity == id) throw std::logic_error("Duplicate physics body");
@@ -56,7 +67,7 @@ bool PhysicsWorld::Supported(EntityId id) const noexcept {
     return false;
 }
 void PhysicsWorld::Step(float dt) {
-    if (!std::isfinite(dt) || dt <= 0 || dt > 1.f/30) throw std::invalid_argument("Physics step must be in (0, 1/30]");
+    if (!std::isfinite(dt) || dt <= 0 || dt > settings_.maxStepSeconds) throw std::invalid_argument("Invalid physics step");
     std::erase_if(bodies_,[&](const Body& body) { return !scene_.Alive(body.entity); });
     for (const auto& body : bodies_) ValidateEntity(body.entity);
     // Validate integrated values before mutating any body.
@@ -74,12 +85,12 @@ void PhysicsWorld::Step(float dt) {
         for (unsigned axis = 0; axis < 3; ++axis) {
             const float start = Axis(p,axis), delta = Axis(v,axis)*dt;
             float end = start+delta;
-            for (const auto& wall : bodies_) if (wall.desc.type == BodyType::Static) {
+            for (const auto& wall : bodies_) if (wall.desc.type == BodyType::Static && Collides(body.desc,wall.desc)) {
                 ++stats_.candidates;
                 const auto wp = scene_.Get<TransformComponent>(wall.entity)->position;
                 bool transverse = true;
                 for (unsigned other = 0; other < 3; ++other) if (other != axis &&
-                    std::abs(Axis(p,other)-Axis(wp,other)) >= Axis(body.desc.halfExtent,other)+Axis(wall.desc.halfExtent,other)-.00001f) transverse = false;
+                    std::abs(Axis(p,other)-Axis(wp,other)) >= Axis(body.desc.halfExtent,other)+Axis(wall.desc.halfExtent,other)-settings_.contactTolerance*.1f) transverse = false;
                 if (!transverse) continue;
                 const float radius = Axis(body.desc.halfExtent,axis)+Axis(wall.desc.halfExtent,axis);
                 const float low = Axis(wp,axis)-radius, high = Axis(wp,axis)+radius;
@@ -87,13 +98,14 @@ void PhysicsWorld::Step(float dt) {
                 if (delta < 0 && start >= high && end <= high) end = std::max(end,high);
             }
             Axis(p,axis) = end;
-            if (end != start+delta) Axis(v,axis) = 0;
+            if (end != start+delta) Axis(v,axis) = -Axis(v,axis)*settings_.restitution;
         }
     }
     // Iterative mass-weighted penetration correction; perfectly inelastic normal response.
-    for (unsigned iteration = 0; iteration < 8; ++iteration) {
+    for (unsigned iteration = 0; iteration < settings_.solverIterations; ++iteration) {
         for (std::size_t i = 0; i < bodies_.size(); ++i) for (std::size_t j = i+1; j < bodies_.size(); ++j) {
             auto& a = bodies_[i]; auto& b = bodies_[j];
+            if (!Collides(a.desc,b.desc)) continue;
             const float ia = a.desc.type == BodyType::Dynamic ? 1/a.desc.mass : 0;
             const float ib = b.desc.type == BodyType::Dynamic ? 1/b.desc.mass : 0;
             if (ia+ib == 0) continue;
@@ -103,7 +115,7 @@ void PhysicsWorld::Step(float dt) {
             float depth = 1e30f; unsigned axis = 0; bool overlap = true;
             for (unsigned k = 0; k < 3; ++k) {
                 const float penetration = Axis(a.desc.halfExtent,k)+Axis(b.desc.halfExtent,k)-std::abs(Axis(pa,k)-Axis(pb,k));
-                if (penetration < -.0001f) overlap = false;
+                if (penetration < -settings_.contactTolerance) overlap = false;
                 if (penetration < depth) { depth = penetration; axis = k; }
             }
             if (!overlap) continue;
@@ -112,10 +124,10 @@ void PhysicsWorld::Step(float dt) {
             Axis(pa,axis) += sign*correction*ia; Axis(pb,axis) -= sign*correction*ib;
             const float relative = (Axis(a.desc.velocity,axis)-Axis(b.desc.velocity,axis))*sign;
             if (relative < 0) {
-                const float impulse = -relative/(ia+ib);
+                const float impulse = -(1.f+settings_.restitution)*relative/(ia+ib);
                 Axis(a.desc.velocity,axis) += sign*impulse*ia; Axis(b.desc.velocity,axis) -= sign*impulse*ib;
             }
-            if (iteration == 7) { Vec3 normal{}; Axis(normal,axis) = sign; contacts_.push_back({a.entity,b.entity,normal}); }
+            if (iteration + 1 == settings_.solverIterations) { Vec3 normal{}; Axis(normal,axis) = sign; contacts_.push_back({a.entity,b.entity,normal}); }
         }
     }
     stats_.contacts = contacts_.size();

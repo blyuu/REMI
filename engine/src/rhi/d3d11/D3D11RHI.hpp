@@ -31,6 +31,7 @@ public:
     [[nodiscard]] std::unique_ptr<IRHITexture> CreateTexture(const TextureDesc& desc) override;
     [[nodiscard]] std::unique_ptr<IRHIRenderTarget> CreateRenderTarget(const RenderTargetDesc& desc) override;
     [[nodiscard]] std::unique_ptr<IRHIPipeline> CreatePipeline(const PipelineDesc& desc) override;
+    [[nodiscard]] std::unique_ptr<IRHISurface> CreateSurface(void* nativeWindow, unsigned width, unsigned height) override;
     [[nodiscard]] IRHIContext& Context() noexcept override { return *contextApi_; }
 private:
     DeviceInfo info_;

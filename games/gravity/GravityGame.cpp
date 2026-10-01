@@ -2,11 +2,16 @@
 #include <cmath>
 #include <stdexcept>
 namespace remi::game {
-GravityGame::GravityGame(MeshHandle platform,MeshHandle player,MeshHandle goal,bool separatePlayerVisual,MeshHandle coin,MeshHandle accent)
-    : platformMesh_(platform),playerMesh_(player),goalMesh_(goal),coinMesh_(coin),accentMesh_(accent),separatePlayerVisual_(separatePlayerVisual) { Restart(); }
+GravityGame::GravityGame(MeshHandle platform,MeshHandle player,MeshHandle goal,bool separatePlayerVisual,MeshHandle coin,MeshHandle accent,GravityLevel level)
+    : platformMesh_(platform),playerMesh_(player),goalMesh_(goal),coinMesh_(coin),accentMesh_(accent),separatePlayerVisual_(separatePlayerVisual),level_(level) {
+    if (!std::isfinite(level_.gravity) || level_.gravity <= 0 || !std::isfinite(level_.moveSpeed) || level_.moveSpeed <= 0)
+        throw std::invalid_argument("Invalid gravity level movement settings");
+    Restart();
+}
 void GravityGame::Restart() {
     auto scene = std::make_unique<Scene>();
-    auto physics = std::make_unique<PhysicsWorld>(*scene);
+    PhysicsSettings settings = level_.physics; settings.gravity = {0,-level_.gravity,0};
+    auto physics = std::make_unique<PhysicsWorld>(*scene,settings);
     const auto box = [&](const char* name,Vec3 position,Vec3 half,MeshHandle mesh,bool collision,BodyType type) {
         const auto id = scene->Create(name);
         *scene->Get<TransformComponent>(id) = {position,{},{half.x*2,half.y*2,half.z*2}};
@@ -14,13 +19,13 @@ void GravityGame::Restart() {
         if (collision) physics->AddBody(id,{type,half});
         return id;
     };
-    (void)box("Start platform",{-5,-.25f,0},{3,.25f,2},platformMesh_,true,BodyType::Static);
-    (void)box("Finish platform",{5,-.25f,0},{3,.25f,2},platformMesh_,true,BodyType::Static);
-    (void)box("Ceiling bridge",{0,4.25f,0},{8,.25f,2},platformMesh_,true,BodyType::Static);
-    (void)box("Green goal",{6,.06f,0},{.8f,.06f,.8f},goalMesh_,false,BodyType::Static);
+    (void)box("Start platform",level_.platforms[0].position,level_.platforms[0].halfExtent,platformMesh_,true,BodyType::Static);
+    (void)box("Finish platform",level_.platforms[1].position,level_.platforms[1].halfExtent,platformMesh_,true,BodyType::Static);
+    (void)box("Ceiling bridge",level_.platforms[2].position,level_.platforms[2].halfExtent,platformMesh_,true,BodyType::Static);
+    (void)box("Green goal",level_.goalPosition,level_.goalHalfExtent,goalMesh_,false,BodyType::Static);
     for (unsigned i = 0; i < coins_.size(); ++i) {
-        const float x = -3.5f + static_cast<float>(i)*3.5f;
-        coins_[i] = box("Gravity coin",{x,3.35f,0},{.35f,.35f,.12f},coinMesh_,false,BodyType::Static);
+        const float x = level_.coinPositions[i].x;
+        coins_[i] = box("Gravity coin",level_.coinPositions[i],{.35f,.35f,.12f},coinMesh_,false,BodyType::Static);
         if (auto* mesh = scene->Get<MeshComponent>(coins_[i])) mesh->material = {{1.f,.9f,.35f},.7f,.25f,.55f};
         (void)box("Coin marker",{x,3.965f,0},{.65f,.015f,.65f},accentMesh_,false,BodyType::Static);
     }
@@ -31,7 +36,7 @@ void GravityGame::Restart() {
     (void)box("Finish arch left",{6,.8f,-1.15f},{.06f,.8f,.06f},accentMesh_,false,BodyType::Static);
     (void)box("Finish arch right",{6,.8f,1.15f},{.06f,.8f,.06f},accentMesh_,false,BodyType::Static);
     (void)box("Finish arch beam",{6,1.6f,0},{.06f,.06f,1.21f},accentMesh_,false,BodyType::Static);
-    const auto player = box("Player",{-6,.4f,0},{.35f,.4f,.35f},separatePlayerVisual_ ? MeshHandle{} : playerMesh_,true,BodyType::Dynamic);
+    const auto player = box("Player",level_.playerSpawn,{.35f,.4f,.35f},separatePlayerVisual_ ? MeshHandle{} : playerMesh_,true,BodyType::Dynamic);
     EntityId visual;
     if (separatePlayerVisual_) {
         visual = scene->Create("Player visual");
@@ -67,13 +72,13 @@ void GravityGame::Tick(Controls input,float dt) {
     elapsed_ += dt;
     if (input.flip && Supported()) {
         inverted_ = !inverted_; ++flips_;
-        physics_->SetGravity({0,inverted_ ? 9.81f : -9.81f,0});
+        physics_->SetGravity({0,inverted_ ? level_.gravity : -level_.gravity,0});
         auto v = physics_->Velocity(player_); v.y = 0; physics_->SetVelocity(player_,v);
     }
     const float length = std::sqrt(input.x*input.x+input.z*input.z);
     const float divisor = length > 1 ? length : 1;
     auto velocity = physics_->Velocity(player_);
-    velocity.x = input.x*4/divisor; velocity.z = input.z*4/divisor;
+    velocity.x = input.x*level_.moveSpeed/divisor; velocity.z = input.z*level_.moveSpeed/divisor;
     physics_->SetVelocity(player_,velocity); physics_->Step(dt);
     if (separatePlayerVisual_) {
         auto* visual = scene_->Get<TransformComponent>(playerVisual_);
@@ -95,8 +100,10 @@ void GravityGame::Tick(Controls input,float dt) {
             ++coinsCollected_;
         }
     }
-    if (p.y < -5 || p.y > 10 || std::abs(p.x) > 10 || std::abs(p.z) > 5) state_ = State::Lost;
+    if (p.x < level_.deathMin.x || p.y < level_.deathMin.y || p.z < level_.deathMin.z ||
+        p.x > level_.deathMax.x || p.y > level_.deathMax.y || p.z > level_.deathMax.z) state_ = State::Lost;
     else if (!inverted_ && Supported() && coinsCollected_ == TotalCoins() &&
-             std::abs(p.x-6) <= .8f && std::abs(p.z) <= .8f && p.y < .5f) state_ = State::Won;
+             std::abs(p.x-level_.goalPosition.x) <= level_.goalHalfExtent.x &&
+             std::abs(p.z-level_.goalPosition.z) <= level_.goalHalfExtent.z && p.y < level_.goalPosition.y+.44f) state_ = State::Won;
 }
 }
