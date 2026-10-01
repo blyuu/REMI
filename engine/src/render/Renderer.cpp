@@ -1,13 +1,16 @@
 #include <remi/render/Renderer.hpp>
 #include <remi/core/Log.hpp>
 #include <remi/core/Lifetime.hpp>
+#include <remi/rhi/RHIFactory.hpp>
+#include <remi/render/ShaderCache.hpp>
+#include "../rhi/d3d11/D3D11RHI.hpp"
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
 #include <dxgi1_2.h>
-#include <d3dcompiler.h>
 #include <wrl/client.h>
 #include <DirectXMath.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -28,23 +31,6 @@ void ValidateSize(unsigned width, unsigned height) {
     if (!width || !height || width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION)
         throw std::invalid_argument("Invalid render target size");
 }
-ComPtr<ID3DBlob> Compile(const RendererConfig& config, const char* entry, const char* profile) {
-    ComPtr<ID3DBlob> code, errors;
-    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS;
-#ifdef _DEBUG
-    flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-    flags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
-#endif
-    const HRESULT result = config.shaderSource.empty()
-        ? D3DCompileFromFile(config.shaderFile.c_str(), nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, entry, profile, flags, 0, &code, &errors)
-        : D3DCompile(config.shaderSource.data(), config.shaderSource.size(), "ResourceManager shader", nullptr, nullptr, entry, profile, flags, 0, &code, &errors);
-    if (FAILED(result)) {
-        const std::string details = errors ? std::string(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : "Shader file missing or unreadable";
-        throw std::runtime_error(std::string(entry) + ": " + details);
-    }
-    return code;
-}
 }
 struct DeviceOwnership { std::size_t meshes = 0; };
 struct DrawConstants {
@@ -55,16 +41,18 @@ struct DrawConstants {
     Vec3 cameraPosition; float padding2 = 0;
     Vec3 materialTint{1,1,1}; float metallic = 0;
     float roughness = .6f; float emissive = 0; float materialPadding[2]{};
+    float hasBaseColorTexture = 0; float texturePadding[3]{};
 };
 struct GpuQuerySet {
     ComPtr<ID3D11Query> disjoint, start, shadowEnd, colorEnd;
     bool pending = false;
     std::uint64_t sequence = 0;
 };
-static_assert(sizeof(DrawConstants) == 288);
+static_assert(sizeof(DrawConstants) == 304);
 struct Mesh::Impl {
     LifetimeToken lifetime{OwnedKind::Mesh};
-    ComPtr<ID3D11Buffer> vertices, indices;
+    std::unique_ptr<rhi::IRHIBuffer> vertices, indices;
+    std::unique_ptr<rhi::IRHITexture> baseColorTexture;
     std::shared_ptr<DeviceOwnership> ownership;
     ID3D11Device* owner = nullptr;
     UINT count = 0, vertexCount = 0;
@@ -109,23 +97,21 @@ struct Renderer::Impl {
     LifetimeToken lifetime{OwnedKind::Renderer};
     // Shared bookkeeping only: a Mesh can report ownership until its own destruction.
     std::shared_ptr<DeviceOwnership> ownership = std::make_shared<DeviceOwnership>();
+    std::unique_ptr<rhi::IRHIDevice> rhiDevice;
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
     ComPtr<IDXGISwapChain1> swap;
     ComPtr<ID3D11Texture2D> backbuffer, depth;
     ComPtr<ID3D11RenderTargetView> rtv;
     ComPtr<ID3D11DepthStencilView> dsv;
-    ComPtr<ID3D11VertexShader> vs;
-    ComPtr<ID3D11PixelShader> ps;
-    ComPtr<ID3D11InputLayout> layout;
-    ComPtr<ID3D11Buffer> constants;
-    ComPtr<ID3D11RasterizerState> raster;
-    ComPtr<ID3D11DepthStencilState> depthState;
+    std::array<std::unique_ptr<rhi::IRHIPipeline>, static_cast<std::size_t>(ShadingModel::Count)> pipelines;
+    std::unique_ptr<rhi::IRHIPipeline> shadowPipeline;
+    std::unique_ptr<ShaderCache> shaderCache;
+    std::unique_ptr<rhi::IRHIBuffer> constants;
     ComPtr<ID3D11Texture2D> shadowTexture;
     ComPtr<ID3D11DepthStencilView> shadowDepth;
     ComPtr<ID3D11ShaderResourceView> shadowView;
     ComPtr<ID3D11SamplerState> shadowSampler;
-    ComPtr<ID3D11RasterizerState> shadowRaster;
     std::array<GpuQuerySet,4> gpuQueries;
     unsigned gpuNext = 0;
     int gpuActive = -1;
@@ -152,33 +138,38 @@ struct Renderer::Impl {
         Check(device->CreateDepthStencilView(depth.Get(), nullptr, &dsv), "Create DSV");
         width = w; height = h;
     }
+    void BuildPipelines() {
+        rhi::PipelineDesc desc;
+        desc.vertexShader = shaderCache->Get({ShaderStage::Vertex});
+        desc.inputs = {{"POSITION",0,rhi::VertexFormat::Float3}, {"COLOR",12,rhi::VertexFormat::Float3},
+            {"NORMAL",24,rhi::VertexFormat::Float3}, {"TEXCOORD",36,rhi::VertexFormat::Float2}};
+        std::array<std::unique_ptr<rhi::IRHIPipeline>, static_cast<std::size_t>(ShadingModel::Count)> next;
+        for (std::size_t i = 0; i < next.size(); ++i) {
+            desc.pixelShader = shaderCache->Get({ShaderStage::Pixel, static_cast<ShadingModel>(i)});
+            next[i] = rhiDevice->CreatePipeline(desc);
+        }
+        desc.pixelShader.clear(); desc.depthBias = 1000; desc.slopeScaledDepthBias = 2;
+        auto shadow = rhiDevice->CreatePipeline(desc);
+        pipelines.swap(next); shadowPipeline.swap(shadow);
+    }
 };
 
 Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>()) {
     ValidateSize(config.width, config.height);
     if (!config.nativeWindow || !IsWindow(static_cast<HWND>(config.nativeWindow))) throw std::invalid_argument("Renderer requires a live HWND");
     auto& r = *impl_; r.vsync = config.vsync;
-    const D3D_FEATURE_LEVEL requested[] = {D3D_FEATURE_LEVEL_11_0};
-    D3D_FEATURE_LEVEL obtained{};
-    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
-    if (config.requestDebug || config.requireDebug) flags |= D3D11_CREATE_DEVICE_DEBUG;
-    const auto driver = config.useWarp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE;
-    HRESULT result = D3D11CreateDevice(nullptr, driver, nullptr, flags, requested, 1, D3D11_SDK_VERSION, &r.device, &obtained, &r.context);
-    if (result == DXGI_ERROR_SDK_COMPONENT_MISSING && !config.requireDebug) {
-        Log("D3D11 debug layer unavailable; retrying without validation layer");
-        flags &= ~D3D11_CREATE_DEVICE_DEBUG;
-        result = D3D11CreateDevice(nullptr, driver, nullptr, flags, requested, 1, D3D11_SDK_VERSION, &r.device, &obtained, &r.context);
-    }
-    Check(result, "D3D11CreateDevice (feature level 11.0)");
-    if (flags & D3D11_CREATE_DEVICE_DEBUG) Check(r.device.As(&r.diagnostics), "Query debug info queue");
+    r.rhiDevice = rhi::CreateDevice({rhi::Backend::D3D11,
+        config.useWarp ? rhi::Driver::Warp : rhi::Driver::Hardware, config.requestDebug, config.requireDebug});
+    auto& backend = static_cast<rhi::D3D11Device&>(*r.rhiDevice);
+    r.device = backend.NativeDevice();
+    r.context = backend.NativeContext();
+    if (backend.Info().debugLayer) Check(r.device.As(&r.diagnostics), "Query debug info queue");
+    else if (config.requestDebug) Log("D3D11 debug layer unavailable; continuing without validation layer");
     Log(std::string("D3D11 FL11.0 / ") + (config.useWarp ? "WARP" : "hardware") + (r.diagnostics ? " / debug ON" : " / debug OFF"));
     ComPtr<IDXGIDevice> dxgiDevice; ComPtr<IDXGIAdapter> adapter; ComPtr<IDXGIFactory2> factory;
     Check(r.device.As(&dxgiDevice), "Query DXGI device");
     Check(dxgiDevice->GetAdapter(&adapter), "Get adapter");
-    DXGI_ADAPTER_DESC adapterDesc{}; Check(adapter->GetDesc(&adapterDesc), "Get adapter description");
-    std::wstring adapterName(adapterDesc.Description);
-    const int bytes = WideCharToMultiByte(CP_UTF8, 0, adapterName.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (bytes > 0) { std::string name(static_cast<std::size_t>(bytes), '\0'); WideCharToMultiByte(CP_UTF8, 0, adapterName.c_str(), -1, name.data(), bytes, nullptr, nullptr); name.pop_back(); Log("Adapter: " + name); }
+    Log("Adapter: " + backend.Info().adapterName);
     Check(adapter->GetParent(IID_PPV_ARGS(&factory)), "Get DXGI factory");
     DXGI_SWAP_CHAIN_DESC1 swap{};
     swap.Width = config.width; swap.Height = config.height; swap.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -187,26 +178,11 @@ Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>(
     Check(factory->CreateSwapChainForHwnd(r.device.Get(), static_cast<HWND>(config.nativeWindow), &swap, nullptr, nullptr, &r.swap), "Create flip swap chain");
     Check(factory->MakeWindowAssociation(static_cast<HWND>(config.nativeWindow), DXGI_MWA_NO_ALT_ENTER), "Disable DXGI fullscreen shortcut");
     r.MakeTargets(config.width, config.height);
-    const auto vertexCode = Compile(config, "VSMain", "vs_5_0");
-    const auto pixelCode = Compile(config, "PSMain", "ps_5_0");
-    Check(r.device->CreateVertexShader(vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), nullptr, &r.vs), "Create VS");
-    Check(r.device->CreatePixelShader(pixelCode->GetBufferPointer(), pixelCode->GetBufferSize(), nullptr, &r.ps), "Create PS");
-    const D3D11_INPUT_ELEMENT_DESC elements[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0}};
-    static_assert(sizeof(Vertex) == 36 && offsetof(Vertex, color) == 12 && offsetof(Vertex, normal) == 24);
-    Check(r.device->CreateInputLayout(elements, 3, vertexCode->GetBufferPointer(), vertexCode->GetBufferSize(), &r.layout), "Create vertex layout");
-    D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth = sizeof(DrawConstants); buffer.Usage = D3D11_USAGE_DYNAMIC;
-    buffer.BindFlags = D3D11_BIND_CONSTANT_BUFFER; buffer.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    r.shaderCache = std::make_unique<ShaderCache>(config.shaderFile, config.shaderSource);
+    static_assert(sizeof(Vertex) == 44 && offsetof(Vertex, color) == 12 && offsetof(Vertex, normal) == 24 && offsetof(Vertex, uv) == 36);
+    r.BuildPipelines();
     static_assert(sizeof(Matrix4) == 64);
-    Check(r.device->CreateBuffer(&buffer, nullptr, &r.constants), "Create per-object constants");
-    D3D11_RASTERIZER_DESC raster{}; raster.FillMode = D3D11_FILL_SOLID; raster.CullMode = D3D11_CULL_BACK; raster.DepthClipEnable = TRUE;
-    Check(r.device->CreateRasterizerState(&raster, &r.raster), "Create raster state");
-    raster.DepthBias = 1000; raster.SlopeScaledDepthBias = 2; raster.DepthBiasClamp = .01f;
-    Check(r.device->CreateRasterizerState(&raster,&r.shadowRaster),"Create shadow raster state");
-    D3D11_DEPTH_STENCIL_DESC depth{}; depth.DepthEnable = TRUE; depth.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL; depth.DepthFunc = D3D11_COMPARISON_LESS;
-    Check(r.device->CreateDepthStencilState(&depth, &r.depthState), "Create depth state");
+    r.constants = r.rhiDevice->CreateBuffer({sizeof(DrawConstants), rhi::BufferBind::Constant, true, nullptr});
     D3D11_TEXTURE2D_DESC shadow{}; shadow.Width = shadow.Height = 2048; shadow.MipLevels = shadow.ArraySize = 1;
     shadow.Format = DXGI_FORMAT_R32_TYPELESS; shadow.SampleDesc.Count = 1;
     shadow.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
@@ -256,18 +232,8 @@ std::unique_ptr<Mesh> Renderer::CreateMeshInternal(std::span<const Vertex> verti
         lo = {std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};
         hi = {std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};
     }
-    auto create = [&](const void* data, UINT size, UINT bind, ComPtr<ID3D11Buffer>& target) {
-        D3D11_BUFFER_DESC desc{}; desc.ByteWidth = size; desc.Usage = D3D11_USAGE_IMMUTABLE; desc.BindFlags = bind;
-        D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem = data;
-        Check(impl_->device->CreateBuffer(&desc, &initial, &target), "Create mesh buffer");
-    };
-    if (dynamic) {
-        D3D11_BUFFER_DESC desc{}; desc.ByteWidth = static_cast<UINT>(vertices.size_bytes());
-        desc.Usage = D3D11_USAGE_DYNAMIC; desc.BindFlags = D3D11_BIND_VERTEX_BUFFER; desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        D3D11_SUBRESOURCE_DATA initial{}; initial.pSysMem = vertices.data();
-        Check(impl_->device->CreateBuffer(&desc,&initial,&mesh->impl_->vertices),"Create dynamic vertex buffer");
-    } else create(vertices.data(), static_cast<UINT>(vertices.size_bytes()), D3D11_BIND_VERTEX_BUFFER, mesh->impl_->vertices);
-    create(indices.data(), static_cast<UINT>(indices.size_bytes()), D3D11_BIND_INDEX_BUFFER, mesh->impl_->indices);
+    mesh->impl_->vertices = impl_->rhiDevice->CreateBuffer({vertices.size_bytes(), rhi::BufferBind::Vertex, dynamic, vertices.data()});
+    mesh->impl_->indices = impl_->rhiDevice->CreateBuffer({indices.size_bytes(), rhi::BufferBind::Index, false, indices.data()});
     mesh->impl_->count = static_cast<UINT>(indices.size()); mesh->impl_->vertexCount = static_cast<UINT>(vertices.size());
     mesh->impl_->dynamic = dynamic; mesh->impl_->owner = impl_->device.Get();
     mesh->impl_->ownership = impl_->ownership; ++impl_->ownership->meshes;
@@ -283,10 +249,16 @@ void Renderer::UpdateMeshVertices(Mesh& mesh, std::span<const Vertex> vertices) 
             !std::isfinite(vertex.color.x) || !std::isfinite(vertex.color.y) || !std::isfinite(vertex.color.z) ||
             !std::isfinite(vertex.normal.x) || !std::isfinite(vertex.normal.y) || !std::isfinite(vertex.normal.z))
             throw std::invalid_argument("Dynamic mesh contains non-finite values");
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    Check(r.context->Map(mesh.impl_->vertices.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped),"Map dynamic vertices");
-    std::memcpy(mapped.pData,vertices.data(),vertices.size_bytes());
-    r.context->Unmap(mesh.impl_->vertices.Get(),0);
+    r.rhiDevice->UpdateBuffer(*mesh.impl_->vertices, vertices.data(), vertices.size_bytes());
+}
+void Renderer::SetMeshTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba, bool srgb) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (mesh.impl_->owner != r.device.Get() || !width || !height ||
+        static_cast<std::uint64_t>(width) * height * 4 != rgba.size())
+        throw std::invalid_argument("Invalid mesh texture");
+    mesh.impl_->baseColorTexture = r.rhiDevice->CreateTexture({width, height,
+        srgb ? rhi::TextureFormat::RGBA8Srgb : rhi::TextureFormat::RGBA8, false, rgba.data()});
 }
 void Renderer::Resize(unsigned width, unsigned height) {
     auto& r = *impl_;
@@ -308,12 +280,12 @@ void Renderer::BeginFrame(Vec3 color) {
     r.context->ClearRenderTargetView(r.rtv.Get(), clear);
     r.context->ClearDepthStencilView(r.dsv.Get(), D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1, 0);
     const D3D11_VIEWPORT viewport{0, 0, static_cast<float>(r.width), static_cast<float>(r.height), 0, 1};
-    r.context->RSSetViewports(1, &viewport); r.context->RSSetState(r.raster.Get());
-    r.context->OMSetDepthStencilState(r.depthState.Get(), 0); r.context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-    r.context->IASetInputLayout(r.layout.Get()); r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    r.context->VSSetShader(r.vs.Get(), nullptr, 0); r.context->PSSetShader(r.ps.Get(), nullptr, 0);
-    r.context->VSSetConstantBuffers(0, 1, r.constants.GetAddressOf());
-    r.context->PSSetConstantBuffers(0, 1, r.constants.GetAddressOf());
+    r.context->RSSetViewports(1, &viewport);
+    r.context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    auto& commands = r.rhiDevice->Context();
+    commands.BeginExternalPass();
+    commands.SetPipeline(*r.pipelines[0]);
+    commands.SetConstantBuffer(0, *r.constants);
     r.context->PSSetShaderResources(0,1,r.shadowView.GetAddressOf());
     r.context->PSSetSamplers(0,1,r.shadowSampler.GetAddressOf());
     r.shadowPass = false;
@@ -333,16 +305,17 @@ void Renderer::BeginShadow(const Matrix4& matrix) {
     r.context->OMSetRenderTargets(0,nullptr,r.shadowDepth.Get());
     r.context->ClearDepthStencilView(r.shadowDepth.Get(),D3D11_CLEAR_DEPTH,1,0);
     const D3D11_VIEWPORT viewport{0,0,2048,2048,0,1}; r.context->RSSetViewports(1,&viewport);
-    r.context->RSSetState(r.shadowRaster.Get());
-    r.context->OMSetDepthStencilState(r.depthState.Get(),0); r.context->OMSetBlendState(nullptr,nullptr,0xffffffff);
-    r.context->IASetInputLayout(r.layout.Get()); r.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    r.context->VSSetShader(r.vs.Get(),nullptr,0); r.context->VSSetConstantBuffers(0,1,r.constants.GetAddressOf());
-    r.context->PSSetShader(nullptr,nullptr,0);
+    r.context->OMSetBlendState(nullptr,nullptr,0xffffffff);
+    auto& commands = r.rhiDevice->Context();
+    commands.BeginExternalPass();
+    commands.SetPipeline(*r.shadowPipeline);
+    commands.SetConstantBuffer(0,*r.constants);
     r.activeFrame = true; r.shadowPass = true;
 }
 void Renderer::EndShadow() {
     if (!impl_->shadowPass) throw std::logic_error("EndShadow requires shadow pass");
     if (impl_->gpuActive >= 0) impl_->context->End(impl_->gpuQueries[impl_->gpuActive].shadowEnd.Get());
+    impl_->rhiDevice->Context().EndExternalPass();
     impl_->shadowPass = false; BeginFrame(); impl_->shadowReady = true;
 }
 void Renderer::DrawLit(const Mesh& mesh, const Matrix4& world, const Matrix4& viewProjection, const DirectionalLight& light, const MaterialProperties& material) {
@@ -359,7 +332,8 @@ void Renderer::DrawLitPrepared(const Mesh& mesh, const Matrix4& world, const Mat
         material.tint.x < 0 || material.tint.y < 0 || material.tint.z < 0 ||
         !std::isfinite(material.metallic) || material.metallic < 0 || material.metallic > 1 ||
         !std::isfinite(material.roughness) || material.roughness < .04f || material.roughness > 1 ||
-        !std::isfinite(material.emissive) || material.emissive < 0 || material.emissive > 2)
+        !std::isfinite(material.emissive) || material.emissive < 0 || material.emissive > 2 ||
+        material.shadingModel >= ShadingModel::Count)
         throw std::invalid_argument("Invalid material properties");
     if (impl_->shadowPass) throw std::logic_error("Lit draw inside shadow pass");
     DrawInternal(mesh,modelViewProjection,world,&light,material);
@@ -368,29 +342,49 @@ void Renderer::DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4&
     auto& r = *impl_;
     if (!r.activeFrame) throw std::logic_error("Draw requires BeginFrame");
     if (mesh.impl_->owner != r.device.Get()) throw std::invalid_argument("Mesh belongs to another device");
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    Check(r.context->Map(r.constants.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped), "Map constants");
+    auto& commands = r.rhiDevice->Context();
+    if (!r.shadowPass) commands.SetPipeline(*r.pipelines[static_cast<std::size_t>(light ? material.shadingModel : ShadingModel::Standard)]);
     DrawConstants constants{}; constants.mvp = mvp; constants.world = world; constants.lightMatrix = r.lightMatrix;
     if (light) { constants.direction = light->direction; constants.intensity = light->intensity; constants.color = light->color;
         constants.ambient = light->ambient; constants.cameraPosition = light->cameraPosition;
         constants.lit = 1; constants.shadows = r.shadowReady ? 1.f : 0.f; }
     constants.materialTint = material.tint; constants.metallic = material.metallic;
     constants.roughness = material.roughness; constants.emissive = material.emissive;
-    std::memcpy(mapped.pData, &constants, sizeof(constants)); r.context->Unmap(r.constants.Get(), 0);
-    const UINT stride = sizeof(Vertex), offset = 0;
-    r.context->IASetVertexBuffers(0, 1, mesh.impl_->vertices.GetAddressOf(), &stride, &offset);
-    r.context->IASetIndexBuffer(mesh.impl_->indices.Get(), DXGI_FORMAT_R32_UINT, 0);
-    r.context->DrawIndexed(mesh.impl_->count, 0, 0);
+    constants.hasBaseColorTexture = mesh.impl_->baseColorTexture ? 1.f : 0.f;
+    r.rhiDevice->UpdateBuffer(*r.constants, &constants, sizeof(constants));
+    if (!r.shadowPass) commands.SetTexture(1,mesh.impl_->baseColorTexture.get());
+    commands.SetVertexBuffer(*mesh.impl_->vertices,sizeof(Vertex));
+    commands.SetIndexBuffer(*mesh.impl_->indices);
+    commands.DrawIndexed(mesh.impl_->count);
 }
 void Renderer::Present() {
     auto& r = *impl_;
     if (!r.activeFrame || r.shadowPass) throw std::logic_error("Present requires color pass");
+    r.rhiDevice->Context().EndExternalPass();
     const HRESULT result = r.swap->Present(r.vsync ? 1 : 0, 0);
     r.activeFrame = false;
     if (result == DXGI_STATUS_OCCLUDED) Sleep(16);
     if (result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET)
         Check(r.device->GetDeviceRemovedReason(), "D3D11 device removed");
     Check(result, "Present");
+}
+bool Renderer::ReloadShaders() {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    auto previous = *r.shaderCache;
+    if (!r.shaderCache->ReloadIfChanged()) return false;
+    try { r.BuildPipelines(); }
+    catch (...) { *r.shaderCache = std::move(previous); throw; }
+    return true;
+}
+bool Renderer::ReplaceShaderSource(std::string source) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    auto previous = *r.shaderCache;
+    if (!r.shaderCache->ReplaceSource(std::move(source))) return false;
+    try { r.BuildPipelines(); }
+    catch (...) { *r.shaderCache = std::move(previous); throw; }
+    return true;
 }
 void Renderer::BeginGpuProfile() {
     auto& r = *impl_;
@@ -482,10 +476,14 @@ ShutdownReport Renderer::ShutdownAndValidate() {
     ComPtr<ID3D11Debug> debug;
     if (r.diagnostics) Check(r.device.As(&debug), "Query shutdown debug interface");
     r.context->ClearState(); r.context->Flush();
-    r.constants.Reset(); r.layout.Reset(); r.vs.Reset(); r.ps.Reset(); r.raster.Reset(); r.depthState.Reset();
-    r.shadowSampler.Reset(); r.shadowView.Reset(); r.shadowDepth.Reset(); r.shadowTexture.Reset(); r.shadowRaster.Reset();
+    r.constants.reset();
+    for (auto& pipeline : r.pipelines) pipeline.reset();
+    r.shadowPipeline.reset();
+    r.shaderCache.reset();
+    r.shadowSampler.Reset(); r.shadowView.Reset(); r.shadowDepth.Reset(); r.shadowTexture.Reset();
     for (auto& set : r.gpuQueries) { set.disjoint.Reset(); set.start.Reset(); set.shadowEnd.Reset(); set.colorEnd.Reset(); }
     r.rtv.Reset(); r.dsv.Reset(); r.backbuffer.Reset(); r.depth.Reset(); r.swap.Reset(); r.context.Reset();
+    r.rhiDevice.reset();
     r.activeFrame = false; r.closed = true;
     if (debug) {
         r.diagnostics->ClearStoredMessages();

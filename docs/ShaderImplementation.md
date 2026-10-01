@@ -2,9 +2,11 @@
 
 REMI 0.11.0의 현재 HLSL은 `shaders/Basic.hlsl` 한 파일에 `VSMain`과 `PSMain`으로 구현되어 있다. 이 문서는 화면 결과가 **어떤 계산에서 나오는지**와 아직 구현하지 않은 것을 구분한다. 셰이더는 D3DCompile로 `vs_5_0`·`ps_5_0`에 맞춰 컴파일한다.
 
+`ShaderCache`는 정점 셰이더 1개와 `ShadingModel`별 픽셀 셰이더 바이트코드를 캐시한다. 현재 지원 모델은 Standard(기존 조명), Unlit(직접광 무시), Toon(확산광을 단계화) 세 가지다. MeshComponent의 `MaterialProperties.shadingModel`을 바꾸면 렌더러가 해당 픽셀 셰이더를 선택한다. 이전 REMI의 Face·Hair·Hybrid 모델은 필요한 방향·마스크·텍스처 데이터 경로가 현재 엔진에 없어 옮기지 않았다. Toon도 범용 단계형 확산광일 뿐 캐릭터 전용 완성형 셰이더는 아니다.
+
 ## 입력과 상수
 
-Vertex 입력은 `POSITION`, `COLOR`, `NORMAL` float3이다. `PerObject` constant buffer에는 모델-뷰-투영 행렬, 월드 행렬, 광원 행렬, 방향광 색·강도, ambient, 카메라 위치, 재질 tint/metallic/roughness/emissive 값이 들어간다. `row_major` 행렬과 `mul(rowVector, matrix)`를 함께 사용한다. Shadow map은 `t0`, 비교 sampler는 `s0`에 바인딩한다.
+Vertex 입력은 `POSITION`, `COLOR`, `NORMAL` float3과 `TEXCOORD0` float2이다. `PerObject` constant buffer에는 모델-뷰-투영 행렬, 월드 행렬, 광원 행렬, 방향광 색·강도, ambient, 카메라 위치, 재질 tint/metallic/roughness/emissive 및 기본색 텍스처 유무가 들어간다. `row_major` 행렬과 `mul(rowVector, matrix)`를 함께 사용한다. Shadow map은 `t0/s0`, 기본색 텍스처는 `t1/s1`이다. 기본색 텍스처는 sRGB SRV로 읽어 선형 공간에서 정점 색과 곱한다.
 
 `MaterialProperties`의 기본값은 tint `(1,1,1)`, metallic `0`, roughness `0.6`, emissive `0`이다. 렌더러는 metallic 0~1, roughness 0.04~1, emissive 0~2 범위를 검사한다. 이 값들은 **현재 간이 조명 모델의 조정 변수**이며 금속/거칠기 PBR 재질을 의미하지 않는다.
 
@@ -32,13 +34,13 @@ highlight ≈ strength(metallic) × max(0, dot(N, H))^power(roughness)
 
 ## 캐릭터 색과 애니메이션
 
-RMCH 캐릭터는 정점 색을 저장한다. Blender 베이크 도구는 재질 기본색이나 지정한 diffuse 이미지의 UV 샘플을 정점 색에 기록한다. 런타임 셰이더가 이미지 텍스처를 샘플링하는 것은 아니다. `BakedAnimation`은 CPU에서 두 프레임의 위치·노멀을 보간하고 동적 vertex buffer에 업로드한다. 본 행렬이나 skinning weight는 HLSL에 전달하지 않는다.
+RMCH 캐릭터는 정점 색을 저장한다. Blender 베이크 도구는 재질 기본색이나 지정한 diffuse 이미지의 UV 샘플을 정점 색에 기록한다. `BakedAnimation`은 CPU에서 두 프레임의 위치·노멀을 보간한다. glTF/GLB는 UV·정점 색·기본색 텍스처를 런타임에서 읽는다. `Animator`가 glTF 관절 행렬을 계산하고 `GltfAsset`이 네 개의 가중치를 CPU에서 적용해 동적 vertex buffer에 업로드한다. HLSL 본 팔레트나 GPU 스키닝은 아직 없다.
 
 ## 정확성·품질 한계
 
 - sRGB render-target view는 사용하지만 전체 색 관리 파이프라인과 HDR tone mapping은 없다.
-- 에너지 보존 BRDF, GGX, Fresnel, IBL, normal map, 실시간 텍스처 샘플링은 없다.
+- 에너지 보존 BRDF, GGX, Fresnel, IBL, normal map, metallic-roughness map은 없다. 기본색 텍스처만 실시간 샘플링한다.
 - 방향광 그림자는 단일 2048² 맵이다. bias와 고정 PCF 커널 때문에 acne, peter-panning, 먼 거리 해상도 저하가 나타날 수 있다.
 - 현재 `metallic`/`roughness` UI 값이나 은색 프리셋은 PBR 정확성의 증거가 아니다.
 
-품질을 올릴 때는 임의로 수식을 늘리기보다 기준 장면과 측정 조건을 먼저 고정해야 한다. 같은 카메라·광원에서 diffuse/normal/shadow/roughness 진단 화면을 만들고, 색 공간과 normal transform을 검증한 뒤 텍스처·BRDF·IBL 순서로 확장하는 것이 다음 단계다. 렌더링 흐름은 [RenderingPipeline.md](RenderingPipeline.md)에 정리했다.
+품질을 올릴 때는 기준 장면과 측정 조건을 먼저 고정해야 한다. 같은 카메라·광원에서 기본색/normal/shadow/roughness 진단 화면을 만들고, 색 공간과 normal transform을 검증한 뒤 normal map·BRDF·IBL 순서로 확장하는 것이 다음 단계다. 렌더링 흐름은 [RenderingPipeline.md](RenderingPipeline.md)에 정리했다.

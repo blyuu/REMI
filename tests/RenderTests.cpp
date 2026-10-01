@@ -4,6 +4,8 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 #include <stdexcept>
 
 void Check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -93,6 +95,40 @@ int wmain(int argc, wchar_t** argv) {
             rejected = false;
             try { remi::Renderer bad(broken); } catch (const std::runtime_error&) { rejected = true; }
             Check(rejected, "Missing shader did not report startup failure");
+        }
+        {
+            const auto temp = std::filesystem::temp_directory_path() / "remi_renderer_reload_test.hlsl";
+            std::filesystem::copy_file(argv[1],temp,std::filesystem::copy_options::overwrite_existing);
+            remi::Window another(wc);
+            auto reloadConfig = config; reloadConfig.nativeWindow = another.NativeHandle(); reloadConfig.shaderFile = temp;
+            remi::Renderer hot(reloadConfig);
+            { std::ofstream out(temp,std::ios::app); out << "\n// live reload\n"; }
+            Check(hot.ReloadShaders(),"Renderer did not rebuild shaders after file change");
+            {
+                std::ifstream input(argv[1],std::ios::binary);
+                std::string source{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
+                const std::string inputNormal = "float3 normal : NORMAL;";
+                const std::string transformNormal = "output.normal = mul(input.normal,(float3x3)g_World);";
+                const auto remove = source.find(inputNormal);
+                const auto replace = source.find(transformNormal);
+                Check(remove != std::string::npos && replace != std::string::npos,"Shader signature test source changed");
+                source.replace(replace,transformNormal.size(),"output.normal = float3(0,0,1);");
+                source.erase(remove,inputNormal.size());
+                std::ofstream out(temp,std::ios::binary|std::ios::trunc); out << source;
+            }
+            Check(hot.ReloadShaders(),"Changed vertex input signature was not reflected into layout");
+            { std::ofstream out(temp,std::ios::trunc); out << "invalid HLSL"; }
+            rejected = false;
+            try { (void)hot.ReloadShaders(); } catch (const std::runtime_error&) { rejected = true; }
+            Check(rejected,"Invalid shader edit was accepted");
+            auto triangle = Quad(hot,.5f,{1,0,0});
+            hot.BeginFrame({0,0,0}); hot.Draw(*triangle,remi::Matrix4::Identity());
+            const auto frame = hot.Readback(); hot.Present();
+            Check(frame.rgba[center] > 250,"Renderer lost previous shader after failed reload");
+            triangle.reset();
+            const auto report = hot.ShutdownAndValidate();
+            Check(report.liveChildren == 0 && report.priorWarnings == 0,"Shader reload leaked D3D objects");
+            std::filesystem::remove(temp);
         }
         Check(renderer.CheckDiagnostics() == 0, "D3D11 debug warning/error detected");
         std::cout << "GPU readback: depth/order, resize, viewport, sRGB and camera passed. Debug layer: "

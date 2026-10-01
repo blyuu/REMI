@@ -12,8 +12,10 @@ REMI 0.11.0은 C++ RAII를 소유권 기준으로 사용한다. 이 문서는 **
 | `Scene` | 게임의 `unique_ptr` | `EntityId` | 게임 재시작 또는 종료 |
 | `FileResource` | `ResourceManager` 내부 캐시 | `FileHandle` | unload/clear 또는 manager 종료 |
 | `BakedAnimation` | 앱의 `unique_ptr` | 프레임 업데이트의 참조 | 앱 종료 |
+| `GltfAsset` | 앱의 `unique_ptr` | 그림자·색상 패스의 참조 | Renderer 종료 전 |
+| `IRHIPipeline`/`IRHITexture`/`IRHIRenderTarget` | 생성자(`Renderer`, `Mesh` 또는 호출자)의 `unique_ptr` | RHI 명령의 참조 | 해당 소유자 종료 전 |
 
-Scene의 `MeshComponent`는 Mesh 객체를 소유하지 않는다. `MeshHandle`만 저장하고 그릴 때 캐시에서 해석한다. Renderer와 Mesh의 D3D COM 포인터는 `ComPtr`가 관리한다. 따라서 Mesh 캐시를 먼저 비우고 Renderer를 해제해야 디바이스 자식 객체가 남지 않는다.
+Scene의 `MeshComponent`는 Mesh 객체를 소유하지 않는다. `MeshHandle`만 저장하고 그릴 때 캐시에서 해석한다. Mesh의 버퍼와 선택적인 기본색 텍스처는 RHI 인터페이스의 `unique_ptr`로 소유하며, D3D11 구현 내부의 COM 포인터는 `ComPtr`가 관리한다. `GltfAsset`은 여러 GPU Mesh를 직접 소유한다. 따라서 캐시와 GltfAsset을 먼저 비우고 Renderer를 해제해야 디바이스 자식 객체가 남지 않는다.
 
 ## 오래된 핸들 방지
 
@@ -25,7 +27,7 @@ Scene의 `MeshComponent`는 Mesh 객체를 소유하지 않는다. `MeshHandle`�
 
 `ResourceManager`는 파일을 읽기 전 정규화한 경로를 key로 사용하고 기본 64 MiB 크기 제한, 완전 읽기 여부, 읽는 중 파일 변경을 검사한다. 이 root는 경로 해석 기준이지 보안 샌드박스는 아니다. `ResourceCache::Load`는 로더나 map 삽입이 실패하면 부분 삽입을 되돌린다.
 
-Renderer는 메시의 빈 데이터·범위 밖 인덱스·NaN/무한 값을 거부하고, 동적 vertex buffer 업데이트 시 같은 디바이스 소유인지와 정점 수가 일치하는지 검사한다. RMCH 로더는 헤더 버전, 파일 크기, 클립 디렉터리, 인덱스, 유한한 색·위치를 검사하고 파일 크기를 512 MiB로 제한한다. 다만 변형 프레임마다 노멀을 미리 계산해 별도 보관하므로 대형 캐릭터에는 CPU 메모리 비용이 크다.
+Renderer는 메시의 빈 데이터·범위 밖 인덱스·NaN/무한 값을 거부하고, 동적 vertex buffer 업데이트 시 같은 디바이스 소유인지와 정점 수가 일치하는지 검사한다. RHI는 다른 디바이스 소유의 버퍼·텍스처·파이프라인 사용을 거부한다. 이미지 디코더는 64메가픽셀을 초과하는 입력을 거부한다. glTF 로더는 cgltf 형식 검사와 본 수·가중치 검사를 수행한다. RMCH 로더는 헤더 버전, 파일 크기, 클립 디렉터리, 인덱스, 유한한 색·위치를 검사하고 파일 크기를 512 MiB로 제한한다. 현재 CPU 스키닝과 RMCH 프레임 보관은 큰 캐릭터에서 메모리·업로드 비용이 높다.
 
 ## 종료 검증
 
@@ -35,4 +37,4 @@ Renderer는 메시의 빈 데이터·범위 밖 인덱스·NaN/무한 값을 거
 
 ## 다음 개선 과제
 
-Scene은 슬롯마다 `std::string`과 optional 컴포넌트를 보유한다. 큰 장면의 데이터 배치와 순회 효율은 별도 프로파일이 필요하다. 애니메이션은 프레임별 위치·노멀 배열로 메모리를 많이 사용하므로 압축 또는 GPU 스키닝이 다음 후보이다. 파일 바이트 캐시와 캐릭터 로더도 아직 통합되어 있지 않다.
+Scene은 슬롯마다 `std::string`과 optional 컴포넌트를 보유한다. 큰 장면의 데이터 배치와 순회 효율은 별도 프로파일이 필요하다. CPU 스키닝과 RMCH 프레임별 배열의 비용을 비교한 뒤 압축 또는 GPU 스키닝을 검토해야 한다. 파일 바이트 캐시와 glTF/RMCH 로더도 아직 통합되어 있지 않다.

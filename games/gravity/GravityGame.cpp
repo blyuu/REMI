@@ -35,14 +35,15 @@ void GravityGame::Restart() {
     EntityId visual;
     if (separatePlayerVisual_) {
         visual = scene->Create("Player visual");
-        scene->Add<MeshComponent>(visual,{playerMesh_,true});
+        if (playerMesh_.id) scene->Add<MeshComponent>(visual,{playerMesh_,true});
         if (!scene->SetParent(visual,player)) throw std::logic_error("Cannot attach player visual");
     }
     physics->Step(1.f/60); // Establish initial support before the first input tick.
     physics_.reset(); scene_ = std::move(scene); physics_ = std::move(physics); player_ = player; playerVisual_ = visual;
     state_ = State::Playing; inverted_ = false; facingYaw_ = 0; elapsed_ = 0; flips_ = 0; coinsCollected_ = 0;
     coinCollectedFlags_.fill(false);
-    playerMaterial_ = MaterialPreset::Silver; ApplyPlayerMaterial();
+    playerMaterial_ = separatePlayerVisual_ && !playerMesh_.id ? MaterialPreset::Original : MaterialPreset::Silver;
+    ApplyPlayerMaterial();
 }
 void GravityGame::ApplyPlayerMaterial() {
     auto* mesh = scene_->Get<MeshComponent>(separatePlayerVisual_ ? playerVisual_ : player_);

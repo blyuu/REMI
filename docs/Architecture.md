@@ -9,6 +9,10 @@ flowchart TD
     Game[REMIGravity / REMISandbox] --> Runtime
     Game --> Physics
     Game --> Renderer
+    Game --> Assets
+    Assets --> Renderer
+    Assets --> Resources
+    Renderer --> RHI
     Game --> Resources
     Runtime --> Platform
     Platform --> Core
@@ -16,6 +20,7 @@ flowchart TD
     Renderer --> Scene
     Renderer --> Core
     Resources --> Core
+    RHI --> Core
     Scene --> Core
     DebugUI --> Renderer
 ```
@@ -28,10 +33,14 @@ flowchart TD
 | Scene | EntityId, Transform 계층, MeshComponent | `engine/src/scene/Scene.cpp` |
 | Resources | 파일 로드와 타입별 캐시 | `engine/src/resources/ResourceManager.cpp`, `ResourceCache.hpp` |
 | Physics | Scene 기반 AABB 동역학·접촉 | `engine/src/physics/PhysicsWorld.cpp` |
-| Renderer | D3D11 자원·그림자·색상 패스·GPU 계측 | `engine/src/render/Renderer.cpp` |
+| Renderer | 색상·그림자 패스, 텍스처 연결, GPU 계측 | `engine/src/render/Renderer.cpp` |
+| RHI | 장치·버퍼·텍스처·파이프라인·렌더 명령·오프스크린 타깃 인터페이스와 D3D11 구현 | `engine/include/remi/rhi/`, `engine/src/rhi/` |
+| Assets | 런타임 glTF/GLB·PNG/JPEG·재질 파일, CPU 본 스키닝·상태 머신 | `engine/src/assets/`, `engine/src/animation/` |
 | DebugUI | 성능 오버레이 메시 | `engine/src/debug/DebugOverlay.cpp` |
 
 `REMIGravity`는 엔진 라이브러리를 사용하는 게임 사례다. 코인 수집, 중력 반전 조건, 승패 판정과 재질 프리셋은 게임 코드에 남긴다. `PhysicsWorld`는 게임 규칙을 모르고 Scene의 물체·중력·접촉만 다룬다.
+
+`RHIFactory`가 D3D11/WARP 장치를 만들고, `IRHIDevice`가 버퍼·텍스처·파이프라인·오프스크린 타깃을 생성한다. `IRHIContext`가 파이프라인과 리소스 바인딩, 인덱스 드로, 오프스크린 패스를 담당한다. 게임의 기본 swap chain·shadow map 생성, 프레젠트, GPU 질의·진단은 여전히 `Renderer`의 D3D11 코드다. 기존 타깃을 사용하는 렌더 패스는 `BeginExternalPass` 경계로 RHI 명령을 사용한다. 따라서 다른 그래픽 API 지원에는 이 남은 플랫폼 타깃·진단 코드를 추가로 분리해야 한다.
 
 ## 빌드와 실행 경로
 
@@ -63,13 +72,13 @@ Win32 메시지/입력 → OnFixedUpdate(0~8회) → OnFrame(1회) → Present
 
 `EntityId`는 슬롯 인덱스·generation·Scene 식별자로 구성된다. Scene은 컴포넌트를 소유하며, 엔티티가 삭제되면 generation을 올려 이전 ID를 거부한다. 부모 Transform은 로컬 행렬을 부모까지 곱해 월드 행렬을 만든다. 현재 컴포넌트는 Transform과 MeshComponent를 명시적으로 지원하며 범용 ECS 레지스트리는 아니다.
 
-`MeshComponent`는 GPU 포인터 대신 `MeshHandle`을 저장한다. 게임이 사용하는 `ResourceCache<Mesh>`가 실제 Mesh를 소유하고, 렌더 시 `DrawScene`의 resolver가 핸들을 메시로 바꾼다. `ResourceManager`는 파일 바이트의 중복 로드를 막는다. 캐릭터 RMCH 로더는 현재 `BakedAnimation::Load`를 통해 별도로 파일을 읽으므로 모든 에셋이 하나의 통합 리소스 시스템을 통과하는 구조는 아직 아니다.
+`MeshComponent`는 GPU 포인터 대신 `MeshHandle`을 저장한다. 게임이 사용하는 `ResourceCache<Mesh>`가 실제 Mesh를 소유하고, 렌더 시 `DrawScene`의 resolver가 핸들을 메시로 바꾼다. `ImportStaticGltfScene`도 이 경로에 메시와 재질을 등록한다. `ResourceManager`는 파일 바이트의 중복 로드를 막지만 glTF·RMCH 디코더는 파일을 직접 읽는다. 파일 변경 추적과 로딩 정책이 모든 에셋에 통합된 구조는 아직 아니다.
 
 ## 캐릭터 파이프라인
 
-Blender 변환 도구 `tools/bake_character.py`가 리깅된 모델의 변형된 정점 위치를 프레임별 RMCH v2로 저장한다. v2는 이름 있는 여러 클립을 지원한다. `REMIGravity --character <파일> --idle-clip <이름> --move-clip <이름>`으로 게임 코드 변경 없이 선택할 수 있다. v1 Quinn도 읽는다. 현재 런타임은 정점 데이터를 CPU에서 보간해 동적 vertex buffer를 갱신한다. 본 행렬을 GPU에서 스키닝하는 구조는 아니다.
+캐릭터에는 두 경로가 있다. RMCH는 Blender 변환 도구가 프레임별 정점을 저장하고 런타임에서 두 프레임을 보간한다. glTF/GLB는 원본 메시·본·클립을 런타임에서 읽고 `Animator`가 본 행렬을 계산한다. `GltfAsset`은 가중치 네 개를 CPU에서 스키닝해 동적 vertex buffer에 올린다. `AnimStateMachine`은 조건에 따른 클립 전환과 크로스페이드를 담당한다. 둘 다 `REMIGravity --character <파일>`로 선택 가능하다. GPU 스키닝은 아직 없다.
 
-Blender 5.1에서 모델에 애니메이션 action이 포함되어 있다면 다음과 같이 변환한다. 별도 FBX 동작 파일은 `--clip` 대신 `--animation idle=idle.fbx --animation run=run.fbx`를 사용한다. `--mesh <오브젝트명>`으로 LOD를 선택하고 `--texture <재질 슬롯 또는 이름>=<이미지 파일>`로 diffuse 색을 정점에 베이크할 수 있다. 실제 검증한 입력은 Quinn FBX와 별도 동작·diffuse PNG이며 glTF 및 다른 실물 모델의 결과는 아직 검증하지 않았다.
+RMCH 베이크가 필요한 경우 Blender 5.1에서 action을 변환한다. 별도 FBX 동작 파일은 `--clip` 대신 `--animation idle=idle.fbx --animation run=run.fbx`를 사용한다. `--mesh <오브젝트명>`으로 LOD를 선택하고 `--texture <재질 슬롯 또는 이름>=<이미지 파일>`로 diffuse 색을 정점에 베이크할 수 있다. glTF 경로는 자체 테스트용 `.gltf`/`.glb`와 로컬 Rover GLB로 실행을 검증했다. 다른 모델의 축·크기·재질은 개별 확인이 필요하다.
 
 ```powershell
 blender --background --python tools/bake_character.py -- --source character.glb --clip idle=Idle --clip run=Run --output character.rmc
@@ -80,4 +89,4 @@ build\vs2022-x64\bin\Debug\REMIGravity.exe --character character.rmc
 
 CTest는 Scene, 물리, 리소스, 렌더러, 캐릭터 파일 등을 검사한다. D3D11 debug layer 경고와 종료 시 live object 검사를 별도로 수행한다. CPU 단계와 GPU shadow/color 시간은 게임 CSV로 기록할 수 있다. 검증 방법은 [RenderingPipeline.md](RenderingPipeline.md)와 [MemoryManagement.md](MemoryManagement.md)에 적었다.
 
-REMI는 학습·포트폴리오용 소형 엔진이다. 현재 범위에는 범용 에디터, 런타임 glTF 로더, 콘솔 백엔드, 멀티스레드 렌더러가 포함되지 않는다.
+REMI는 학습·포트폴리오용 소형 엔진이다. 현재 범위에는 범용 에디터, 콘솔 백엔드, 멀티스레드 렌더러가 포함되지 않는다. glTF는 첫 번째 스킨과 기본색 텍스처 중심의 구현이며 완전한 glTF/PBR 지원은 아니다.

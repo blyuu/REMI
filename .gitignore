@@ -36,8 +36,10 @@ desktop.ini
 !/docs/RenderingPipeline.md
 !/docs/ShaderImplementation.md
 !/docs/MemoryManagement.md
+!/docs/AssetPipeline.md
 /documentation/
 /versions/
+/logs/
 
 # Locally exported Unreal template character; generated source binary.
 /assets/Quinn/*.rmc

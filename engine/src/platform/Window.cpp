@@ -16,7 +16,7 @@ Key Translate(WPARAM key) noexcept {
     case VK_UP: return Key::Up; case VK_DOWN: return Key::Down;
     case VK_LEFT: return Key::Left; case VK_RIGHT: return Key::Right;
     case VK_SHIFT: return Key::Shift; case VK_CONTROL: return Key::Control;
-    case VK_F1: return Key::F1; case VK_F2: return Key::F2; default: return Key::Count;
+    case VK_F1: return Key::F1; case VK_F2: return Key::F2; case VK_F5: return Key::F5; default: return Key::Count;
     }
 }
 std::runtime_error WinError(const char* operation) {

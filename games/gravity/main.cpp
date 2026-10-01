@@ -5,10 +5,14 @@
 #include <remi/runtime/Application.hpp>
 #include <remi/render/SceneRenderer.hpp>
 #include <remi/render/BakedAnimation.hpp>
+#include <remi/assets/GltfAsset.hpp>
 #include <remi/resources/ResourceManager.hpp>
 #include <remi/core/Log.hpp>
 #include <remi/core/BuildInfo.hpp>
 #include <array>
+#include <algorithm>
+#include <cctype>
+#include <cwctype>
 #include <cmath>
 #include <sstream>
 #include <fstream>
@@ -53,27 +57,61 @@ public:
     std::filesystem::path demoDirectory;
     std::filesystem::path characterFile;
     std::string idleClip = "idle", moveClip = "run";
+    bool idleClipExplicit = false, moveClipExplicit = false;
     void OnStart(remi::Window& window) override {
         remi::ResourceManager files(remi::ExecutableDirectory());
         const auto shader = files.LoadFile("shaders/Basic.hlsl"); const auto& bytes = files.Get(shader)->bytes;
         if (bytes.empty()) throw std::runtime_error("Empty shader");
         remi::RendererConfig config; config.nativeWindow = window.NativeHandle(); config.width = window.Width(); config.height = window.Height();
-        config.shaderSource.assign(bytes.begin(),bytes.end()); config.useWarp = warp; config.vsync = !smoke && demoDirectory.empty();
+        config.shaderFile = remi::ExecutableDirectory() / "shaders/Basic.hlsl";
+        config.useWarp = warp; config.vsync = !smoke && demoDirectory.empty();
         if (!demoDirectory.empty()) std::filesystem::create_directories(demoDirectory);
         auto renderer = std::make_unique<remi::Renderer>(config);
         auto meshes = std::make_unique<remi::ResourceCache<remi::Mesh>>();
         auto platform = meshes->Load("platform",[&] { return Box(*renderer,{.22f,.30f,.42f}); });
         const auto selectedCharacter = characterFile.empty() ? remi::ExecutableDirectory() / "assets/characters/default.rmc" : characterFile;
         if (!characterFile.empty() && !std::filesystem::exists(selectedCharacter)) throw std::runtime_error("Character asset not found: " + selectedCharacter.string());
-        auto animation = std::filesystem::exists(selectedCharacter) ? remi::BakedAnimation::Load(selectedCharacter) : nullptr;
+        auto extension = selectedCharacter.extension().wstring();
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return std::towlower(c); });
+        const bool gltfCharacter = extension == L".glb" || extension == L".gltf";
+        auto gltfAsset = gltfCharacter ? remi::assets::GltfAsset::Load(*renderer, selectedCharacter) : nullptr;
+        auto animation = !gltfCharacter && std::filesystem::exists(selectedCharacter) ? remi::BakedAnimation::Load(selectedCharacter) : nullptr;
         if (animation && (!animation->HasClip(idleClip) || !animation->HasClip(moveClip)))
             throw std::runtime_error("Character asset must contain selected idle and move clips");
-        auto player = meshes->Load("player",[&] { return animation ? animation->CreateMesh(*renderer) : Box(*renderer,{1,.42f,.07f}); });
+        if (gltfAsset && gltfAsset->HasSkeleton()) {
+            const auto clips = gltfAsset->ClipNames();
+            auto findClip = [&](const std::string& name, int fallback, bool explicitName, std::initializer_list<std::string_view> hints) {
+                for (std::size_t i = 0; i < clips.size(); ++i) if (clips[i] == name) return static_cast<int>(i);
+                if (explicitName) throw std::runtime_error("glTF animation clip not found: " + name);
+                for (std::size_t i = 0; i < clips.size(); ++i) {
+                    std::string lower = clips[i];
+                    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    for (auto hint : hints) if (lower.find(hint) != std::string::npos) return static_cast<int>(i);
+                }
+                return fallback;
+            };
+            if (!clips.empty()) {
+                const int idle = findClip(idleClip, 0, idleClipExplicit, {"idle", "stand"});
+                const int move = findClip(moveClip, idle, moveClipExplicit, {"run", "walk"});
+                auto& states = gltfAsset->States();
+                const int idleState = states.AddState("idle", idle);
+                const int moveState = states.AddState("move", move);
+                states.AddTransition(idleState, moveState, [](const auto& p) { return p.Get("moving") > .5f; });
+                states.AddTransition(moveState, idleState, [](const auto& p) { return p.Get("moving") <= .5f; });
+                states.Start(gltfAsset->Animation(), idleState);
+                remi::Log("glTF locomotion: " + clips[static_cast<std::size_t>(idle)] + " / " + clips[static_cast<std::size_t>(move)]);
+            }
+            else if (idleClipExplicit || moveClipExplicit) throw std::runtime_error("glTF has no animation clips");
+        }
+        remi::MeshHandle player{};
+        if (!gltfAsset) player = meshes->Load("player",[&] { return animation ? animation->CreateMesh(*renderer) : Box(*renderer,{1,.42f,.07f}); });
         auto goal = meshes->Load("goal",[&] { return Box(*renderer,{.05f,1,.25f}); });
         auto coin = meshes->Load("coin",[&] { return Coin(*renderer); });
         auto accent = meshes->Load("accent",[&] { return Box(*renderer,{.03f,.67f,.76f}); });
-        auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr,coin,accent);
-        remi::Log(animation ? "Character asset loaded: " + selectedCharacter.string() + " (" + idleClip + ", " + moveClip + ")" : "No character asset: using box player");
+        auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr || gltfAsset != nullptr,coin,accent);
+        remi::Log(gltfAsset ? "glTF character loaded: " + selectedCharacter.string() :
+            animation ? "Character asset loaded: " + selectedCharacter.string() + " (" + idleClip + ", " + moveClip + ")" :
+            "No character asset: using box player");
         if (smoke) {
             if (previewFell) {
                 for (unsigned i = 0; i < 200; ++i) game->Tick({1,0},1.f/60);
@@ -91,6 +129,7 @@ public:
         }
         renderer_ = std::move(renderer); meshes_ = std::move(meshes); game_ = std::move(game);
         animation_ = std::move(animation); playerHandle_ = player;
+        gltfAsset_ = std::move(gltfAsset);
         hud_ = std::make_unique<GameHud>(remi::ExecutableDirectory() / "assets/fonts/Pretendard-SemiBold.otf");
         if (!profileCsv.empty()) {
             csv_.open(profileCsv,std::ios::binary);
@@ -130,6 +169,10 @@ public:
         if (input.Held(remi::Key::MouseRight)) camera_.Orbit(static_cast<float>(input.DeltaX()),static_cast<float>(input.DeltaY()));
         camera_.Zoom(input.Wheel());
         if (input.Pressed(remi::Key::F1)) { camera_.yaw = -.25f; camera_.pitch = .22f; camera_.distance = 14; }
+        if (input.Pressed(remi::Key::F5)) {
+            try { if (renderer_->ReloadShaders()) remi::Log("Shader reloaded"); }
+            catch (const std::exception& error) { remi::Log(std::string("Shader reload failed; previous shader retained: ") + error.what()); }
+        }
     }
     void OnFrame(remi::Window& window,double elapsed,double) override {
         profiler_.BeginFrame(); profiler_.Record(remi::CpuStage::Physics,physicsMs_); physicsMs_ = 0;
@@ -141,12 +184,32 @@ public:
         const auto lightVP = remi::DirectionalShadowMatrix({0,2,0},light.direction,24);
         const auto resolve = [&](remi::MeshHandle handle) { return meshes_->Get(handle); };
         if (animation_) animation_->Update(*renderer_,*meshes_->GetMutable(playerHandle_),running_ ? moveClip : idleClip,elapsed);
+        if (gltfAsset_) {
+            switch (game_->PlayerMaterial()) {
+            case remi::game::MaterialPreset::Silver: gltfAsset_->SetGlobalTint({.72f,.78f,.86f}); break;
+            case remi::game::MaterialPreset::Original: gltfAsset_->SetGlobalTint({1,1,1}); break;
+            case remi::game::MaterialPreset::Gold: gltfAsset_->SetGlobalTint({.9f,.61f,.2f}); break;
+            case remi::game::MaterialPreset::Midnight: gltfAsset_->SetGlobalTint({.16f,.24f,.34f}); break;
+            }
+            gltfAsset_->States().SetBool("moving", running_);
+            gltfAsset_->Update(*renderer_, static_cast<float>(elapsed));
+        }
+        shaderPollSeconds_ += elapsed;
+        if (shaderPollSeconds_ >= 1.) {
+            shaderPollSeconds_ = 0;
+            try { if (renderer_->ReloadShaders()) remi::Log("Shader file changed; reloaded"); }
+            catch (const std::exception& error) { remi::Log(std::string("Shader reload failed; previous shader retained: ") + error.what()); }
+        }
         renderer_->BeginGpuProfile();
         const auto shadowStart = remi::CpuProfiler::Clock::now();
-        renderer_->BeginShadow(lightVP); const auto shadowStats = remi::DrawScene(*renderer_,game_->World(),lightVP,resolve); renderer_->EndShadow();
+        renderer_->BeginShadow(lightVP);
+        const auto shadowStats = remi::DrawScene(*renderer_,game_->World(),lightVP,resolve);
+        if (gltfAsset_) gltfAsset_->DrawShadow(*renderer_, game_->PlayerVisualWorld(), lightVP);
+        renderer_->EndShadow();
         profiler_.Add(remi::CpuStage::Shadow,shadowStart);
         const auto colorStart = remi::CpuProfiler::Clock::now();
         const auto stats = remi::DrawScene(*renderer_,game_->World(),vp,resolve,&light);
+        if (gltfAsset_) gltfAsset_->Draw(*renderer_, game_->PlayerVisualWorld(), vp, light);
         profiler_.Add(remi::CpuStage::Color,colorStart);
         if (stats.missing) throw std::runtime_error("Game render validation failed");
         hud_->Update(*renderer_,renderer_->Width(),renderer_->Height(),*game_);
@@ -202,7 +265,7 @@ public:
         window.SetTitle(title.str());
     }
     void OnStop() noexcept override {
-        overlay_.Clear(); hud_.reset(); game_.reset(); animation_.reset(); meshes_.reset();
+        overlay_.Clear(); hud_.reset(); game_.reset(); animation_.reset(); gltfAsset_.reset(); meshes_.reset();
         try { if (renderer_) { const auto audit = renderer_->ShutdownAndValidate(); failed = audit.liveChildren != 0 || audit.priorWarnings != 0;
             remi::Log("Game GPU shutdown: live children="+std::to_string(audit.liveChildren)+", warnings="+std::to_string(audit.priorWarnings)); } }
         catch (const std::exception& e) { failed = true; remi::Log(e.what()); }
@@ -215,6 +278,7 @@ private:
     std::unique_ptr<remi::ResourceCache<remi::Mesh>> meshes_;
     std::unique_ptr<remi::game::GravityGame> game_;
     std::unique_ptr<remi::BakedAnimation> animation_;
+    std::unique_ptr<remi::assets::GltfAsset> gltfAsset_;
     std::unique_ptr<GameHud> hud_;
     remi::MeshHandle playerHandle_;
     bool running_ = false;
@@ -223,6 +287,7 @@ private:
     remi::CpuProfiler profiler_;
     std::ofstream csv_;
     double physicsMs_ = 0, overlayAge_ = 1;
+    double shaderPollSeconds_ = 0;
     bool showDebug_ = false;
     unsigned frame_ = 0;
     unsigned demoTick_ = 0, nextDemoCaptureTick_ = 0, demoFrames_ = 0;
@@ -250,8 +315,8 @@ int wmain(int argc,wchar_t** argv) {
         else if (arg == L"--profile-csv" && i+1 < argc) app.profileCsv = argv[++i];
         else if (arg == L"--record-demo" && i+1 < argc) app.demoDirectory = argv[++i];
         else if (arg == L"--character" && i+1 < argc) app.characterFile = argv[++i];
-        else if (arg == L"--idle-clip" && i+1 < argc) { app.idleClip = clipName(argv[++i]); if (app.idleClip.empty()) return 2; }
-        else if (arg == L"--move-clip" && i+1 < argc) { app.moveClip = clipName(argv[++i]); if (app.moveClip.empty()) return 2; }
+        else if (arg == L"--idle-clip" && i+1 < argc) { app.idleClip = clipName(argv[++i]); app.idleClipExplicit = true; if (app.idleClip.empty()) return 2; }
+        else if (arg == L"--move-clip" && i+1 < argc) { app.moveClip = clipName(argv[++i]); app.moveClipExplicit = true; if (app.moveClip.empty()) return 2; }
         else if (arg == L"--profile-frames" && i+1 < argc) {
             try { const auto value = std::stoul(argv[++i]); if (value < 12 || value > 10000) return 2; app.profileFrames = static_cast<unsigned>(value); app.smoke = true; }
             catch (const std::exception&) { return 2; }

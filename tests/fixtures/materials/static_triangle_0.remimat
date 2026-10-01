@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "shadingModel": "Toon",
+  "tint": [
+    0.6,
+    0.8,
+    1.0
+  ],
+  "metallic": 0.0,
+  "roughness": 0.7,
+  "emissive": 0.0,
+  "baseColorTexture": "../sample.png"
+}

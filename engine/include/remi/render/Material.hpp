@@ -1,5 +1,6 @@
 #pragma once
 #include <remi/core/Math.hpp>
+#include <remi/render/ShadingModel.hpp>
 
 namespace remi {
 struct MaterialProperties {
@@ -7,5 +8,6 @@ struct MaterialProperties {
     float metallic = 0;
     float roughness = .6f;
     float emissive = 0;
+    ShadingModel shadingModel = ShadingModel::Standard;
 };
 }

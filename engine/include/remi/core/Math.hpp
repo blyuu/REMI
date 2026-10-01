@@ -2,6 +2,7 @@
 #include <array>
 
 namespace remi {
+struct Vec2 { float x = 0, y = 0; };
 struct Vec3 { float x = 0, y = 0, z = 0; };
 // Row-major storage, row vectors: local * parentWorld * view * projection.
 struct Matrix4 {

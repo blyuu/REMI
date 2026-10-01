@@ -26,6 +26,19 @@ int wmain(int argc,wchar_t** argv) {
         light.direction = {0,0,-1};
         renderer.BeginFrame(); renderer.DrawLit(*mesh,identity,identity,light); const auto dark = center(renderer.Readback()); renderer.Present();
         Check(bright > 190 && bright < 200 && dark > 59 && dark < 67,"Lambert direction or sRGB output incorrect");
+        light.direction = {0,.94f,.35f};
+        remi::MaterialProperties unlit;
+        unlit.shadingModel = remi::ShadingModel::Unlit;
+        remi::MaterialProperties toon;
+        toon.shadingModel = remi::ShadingModel::Toon;
+        renderer.BeginFrame(); renderer.DrawLit(*mesh,identity,identity,light);
+        const auto standardPixel = center(renderer.Readback()); renderer.Present();
+        renderer.BeginFrame(); renderer.DrawLit(*mesh,identity,identity,light,unlit);
+        const auto unlitPixel = center(renderer.Readback()); renderer.Present();
+        renderer.BeginFrame(); renderer.DrawLit(*mesh,identity,identity,light,toon);
+        const auto toonPixel = center(renderer.Readback()); renderer.Present();
+        Check(unlitPixel != standardPixel && toonPixel > standardPixel + 10,
+              "Shading model selection did not change rendered pixels");
         auto smoothVertices = vertices;
         for (auto& vertex : smoothVertices) vertex.normal = {0,1,0};
         auto smoothMesh = renderer.CreateMesh(smoothVertices,indices);

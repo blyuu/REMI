@@ -1,3 +1,7 @@
+#ifndef SHADING_MODEL
+#define SHADING_MODEL 0 // Standard
+#endif
+
 cbuffer PerObject : register(b0)
 {
     row_major float4x4 g_ModelViewProjection;
@@ -9,11 +13,14 @@ cbuffer PerObject : register(b0)
     float3 g_CameraPosition; float g_Padding2;
     float3 g_MaterialTint; float g_Metallic;
     float g_Roughness; float g_Emissive; float2 g_MaterialPadding;
+    float g_HasBaseColorTexture; float3 g_TexturePadding;
 };
 Texture2D<float> g_Shadow : register(t0);
+Texture2D<float4> g_BaseColorTexture : register(t1);
 SamplerComparisonState g_ShadowSampler : register(s0);
-struct VertexInput { float3 position : POSITION; float3 color : COLOR; float3 normal : NORMAL; };
-struct PixelInput { float4 position : SV_Position; float3 color : COLOR; float3 world : TEXCOORD0; float4 light : TEXCOORD1; float3 normal : TEXCOORD2; };
+SamplerState g_BaseColorSampler : register(s1);
+struct VertexInput { float3 position : POSITION; float3 color : COLOR; float3 normal : NORMAL; float2 uv : TEXCOORD0; };
+struct PixelInput { float4 position : SV_Position; float3 color : COLOR; float3 world : TEXCOORD0; float4 light : TEXCOORD1; float3 normal : TEXCOORD2; float2 uv : TEXCOORD3; };
 PixelInput VSMain(VertexInput input)
 {
     PixelInput output;
@@ -23,15 +30,21 @@ PixelInput VSMain(VertexInput input)
     output.world = world.xyz;
     output.light = mul(world,g_LightMatrix);
     output.normal = mul(input.normal,(float3x3)g_World);
+    output.uv = input.uv;
     return output;
 }
 float4 PSMain(PixelInput input) : SV_Target
 {
+    float3 baseColor = input.color;
+    if (g_HasBaseColorTexture > .5) baseColor *= g_BaseColorTexture.Sample(g_BaseColorSampler,input.uv).rgb;
     // Legacy meshes have no normals; animated characters supply smooth normals.
     float3 normal = normalize(cross(ddx(input.world),ddy(input.world)));
     bool smooth = dot(input.normal,input.normal) > .01;
     if (smooth) normal = normalize(input.normal);
-    if (g_Lit < .5) return float4(input.color,1);
+    if (g_Lit < .5) return float4(baseColor,1);
+#if SHADING_MODEL == 1 // Unlit: retains vertex color and tint without direct lighting.
+    return float4(baseColor * g_MaterialTint + g_Emissive, 1);
+#endif
     float diffuse = saturate(dot(normal,-normalize(g_LightDirection)));
     float visibility = 1;
     float3 light = input.light.xyz / input.light.w;
@@ -43,8 +56,13 @@ float4 PSMain(PixelInput input) : SV_Target
                 visibility += g_Shadow.SampleCmpLevelZero(g_ShadowSampler,uv+float2(x,y)/2048.0,light.z-g_Bias);
         visibility /= 9;
     }
+#if SHADING_MODEL == 2 // Toon: a simple stepped diffuse term, not a character-specific shader.
+    float stepped = diffuse >= .65 ? 1 : (diffuse >= .25 ? .55 : .16);
+    float3 toonLight = g_Ambient + g_LightColor * g_Intensity * stepped * visibility;
+    return float4(baseColor * g_MaterialTint * toonLight + g_Emissive, 1);
+#endif
     if (!smooth)
-        return float4(input.color*g_MaterialTint * (g_Ambient + g_LightColor*g_Intensity*diffuse*visibility+g_Emissive),1);
+        return float4(baseColor*g_MaterialTint * (g_Ambient + g_LightColor*g_Intensity*diffuse*visibility+g_Emissive),1);
 
     // Soft sky fill and a restrained broad highlight keep pale armor readable.
     float sky = .55 + .45*saturate(normal.y);
@@ -54,6 +72,6 @@ float4 PSMain(PixelInput input) : SV_Target
     float glossPower = lerp(80,10,g_Roughness);
     float highlight = lerp(.09,.55,g_Metallic)*pow(saturate(dot(normal,halfVector)),glossPower)*visibility;
     float3 diffuseLight = g_Ambient*sky + fill*float3(.82,.90,1) + g_LightColor*g_Intensity*diffuse*visibility;
-    float3 albedo = lerp(input.color*g_MaterialTint,g_MaterialTint,g_Metallic*.7);
+    float3 albedo = lerp(baseColor*g_MaterialTint,g_MaterialTint,g_Metallic*.7);
     return float4(albedo*(diffuseLight*(1-.35*g_Metallic)+g_Emissive) + highlight*g_LightColor,1);
 }

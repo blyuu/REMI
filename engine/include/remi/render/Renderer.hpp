@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace remi {
-struct Vertex { Vec3 position; Vec3 color; Vec3 normal; };
+struct Vertex { Vec3 position; Vec3 color; Vec3 normal; Vec2 uv; };
 struct RendererConfig {
     void* nativeWindow = nullptr;
     unsigned width = 1280, height = 720;
@@ -52,6 +52,7 @@ public:
     [[nodiscard]] std::unique_ptr<Mesh> CreateMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
     [[nodiscard]] std::unique_ptr<Mesh> CreateDynamicMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
     void UpdateMeshVertices(Mesh& mesh, std::span<const Vertex> vertices);
+    void SetMeshTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba, bool srgb = true);
     void Resize(unsigned width, unsigned height);
     void BeginFrame(Vec3 clearColor = {.035f, .055f, .085f});
     void Draw(const Mesh& mesh, const Matrix4& modelViewProjection);
@@ -61,6 +62,10 @@ public:
     // Reuses the transform already computed for culling.
     void DrawLitPrepared(const Mesh& mesh, const Matrix4& world, const Matrix4& modelViewProjection, const DirectionalLight& light, const MaterialProperties& material = {});
     void Present();
+    // Rebuilds shader objects and the input layout after a source change.
+    // Compile failures leave the previous GPU shaders active.
+    [[nodiscard]] bool ReloadShaders();
+    [[nodiscard]] bool ReplaceShaderSource(std::string source);
     void BeginGpuProfile(); // Start before BeginShadow/BeginFrame.
     void EndGpuProfile(); // End after final color draw, before Present.
     [[nodiscard]] GpuTimings PollGpuProfile(); // Nonblocking; last completed sample or invalid.

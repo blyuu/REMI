@@ -28,10 +28,25 @@ set_target_properties(remi_physics PROPERTIES FOLDER "Engine")
 target_link_libraries(remi_scene PUBLIC REMI::Core PRIVATE remi_build_options)
 set_target_properties(remi_scene PROPERTIES FOLDER "Engine")
 
-add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp src/render/SceneRenderer.cpp src/render/BakedAnimation.cpp)
+add_library(remi_rhi STATIC src/rhi/RHIFactory.cpp src/rhi/d3d11/D3D11RHI.cpp)
+add_library(REMI::RHI ALIAS remi_rhi)
+target_link_libraries(remi_rhi PUBLIC REMI::Core PRIVATE remi_build_options d3d11 dxgi d3dcompiler)
+set_target_properties(remi_rhi PROPERTIES FOLDER "Engine")
+
+add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp src/render/SceneRenderer.cpp src/render/BakedAnimation.cpp src/render/ShaderCache.cpp)
 add_library(REMI::Renderer ALIAS remi_renderer)
-target_link_libraries(remi_renderer PUBLIC REMI::Core REMI::Scene PRIVATE remi_build_options d3d11 dxgi d3dcompiler dxguid)
+target_link_libraries(remi_renderer PUBLIC REMI::Core REMI::Scene PRIVATE REMI::RHI remi_build_options d3d11 dxgi d3dcompiler dxguid)
 set_target_properties(remi_renderer PROPERTIES FOLDER "Engine")
+add_library(remi_assets STATIC src/assets/GltfLoader.cpp src/assets/CgltfImpl.cpp
+    src/assets/GltfAsset.cpp src/assets/TextureLoader.cpp src/assets/StbImpl.cpp src/assets/MaterialAsset.cpp
+    src/animation/Animator.cpp src/animation/AnimStateMachine.cpp)
+add_library(REMI::Assets ALIAS remi_assets)
+target_include_directories(remi_assets PRIVATE "${PROJECT_SOURCE_DIR}/third_party/cgltf"
+    "${PROJECT_SOURCE_DIR}/third_party/stb" "${PROJECT_SOURCE_DIR}/third_party/json")
+target_link_libraries(remi_assets PUBLIC REMI::Renderer PRIVATE remi_build_options)
+set_source_files_properties(src/assets/CgltfImpl.cpp PROPERTIES COMPILE_OPTIONS /w)
+set_source_files_properties(src/assets/StbImpl.cpp PROPERTIES COMPILE_OPTIONS /w)
+set_target_properties(remi_assets PROPERTIES FOLDER "Engine")
 add_library(remi_debugui STATIC src/debug/DebugOverlay.cpp)
 add_library(REMI::DebugUI ALIAS remi_debugui)
 target_link_libraries(remi_debugui PUBLIC REMI::Renderer PRIVATE remi_build_options)
