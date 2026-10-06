@@ -31,6 +31,8 @@ glTF의 기본색 계수, metallic, roughness, 기본색 텍스처를 읽는다.
 
 반복 배치에는 `StaticGltfCache(renderer, meshCache)`를 사용한다. `Instantiate(scene, path)`가 정규화한 경로별 모델을 한 번 로드하고 여러 Scene에 같은 GPU MeshHandle을 연결한다. Scene을 해제해도 모델은 유지하며 `Unload(path)`·`Clear()`·캐시 파괴 때 제거한다. Renderer와 meshCache가 StaticGltfCache보다 오래 살아야 한다.
 
+`StaticGltfCache(renderer, meshCache, &jobs)`처럼 `JobSystem`을 전달하면 glTF primitive별 정점 변환과 인덱스 순서 준비를 병렬 실행한다. 모든 CPU 작업의 완료와 예외를 확인한 뒤 D3D11 메시·텍스처 생성 및 캐시 변경을 호출 스레드에서 수행한다. Apocalypse 게임은 이 경로로 건물을 공유 배치하고, 여러 primitive의 Survival Character도 같은 작업 풀에서 준비한다. 풀은 `StaticGltfCache`보다 오래 살아야 한다.
+
 `Reload(path)`는 전체 파일·이미지·GPU 메시 준비에 성공하면 핸들을 유지한 채 교체한다. 기존 엔티티의 재질 값은 인스턴스별 설정으로 유지하고 새 인스턴스에는 갱신한 재질을 사용한다. 스킨 모델이나 primitive 수 변경은 거부하며, 이 경우 unload 후 다시 배치해야 한다. 같은 모델 로드에서 같은 이미지 인덱스/외부 경로를 쓰는 primitive들은 텍스처를 공유한다. 서로 다른 모델 파일 간 텍스처 전역 캐시는 아직 없다.
 
 Sandbox의 `--static-gltf <파일>`이 이 경로를 사용하며 `F5`로 수동 재로드한다. `--inspector` 또는 `F3`으로 엔티티 선택·로컬 위치 편집을 할 수 있다. 파일 감시, Scene 저장, undo/redo는 제공하지 않는다.
@@ -44,6 +46,6 @@ Sandbox의 `--static-gltf <파일>`이 이 경로를 사용하며 `F5`로 수동
 - glTF는 삼각형 primitive와 첫 번째 skin(최대 512개 joint)을 대상으로 한다. 다중 skin, morph target, GPU 스키닝, 메시 노드의 특수 bind 변환은 지원하지 않는다.
 - 기본색 이미지만 셰이더에 바인딩한다. normal/occlusion/metallic-roughness map, alpha blending/masking, 양면 재질, 정식 glTF PBR BRDF는 아직 적용하지 않는다. 따라서 복잡한 캐릭터는 상용 엔진과 같은 외관이 나오지 않는다.
 - 리깅이나 축 방향이 다른 모델은 임포트 후 카메라·스케일·방향을 확인해야 한다. 주어진 Rover GLB는 런타임 로딩과 이동/중력 반전/WARP·하드웨어 종료 검사를 통과했지만, 원본 GLB에 기본색 이미지가 없어 별도 `.remimat`와 텍스처 지정이 필요하다.
-- 테스트의 작은 glTF/GLB fixture는 외부·내장 이미지, 재질 파일 덮어쓰기, 스키닝 후 화면 픽셀 변화, 정적 Scene 임포트, 공유·재로드 실패 복구, D3D 경고·잔존 객체를 검사한다. 현재 로컬 구성은 Debug와 Release 각각 CTest 25개이며 Quinn 에셋이 없으면 해당 조건부 테스트 하나가 빠진다.
+- 테스트의 작은 glTF/GLB fixture는 외부·내장 이미지, 재질 파일 덮어쓰기, 스키닝 후 화면 픽셀 변화, 정적 Scene 임포트, 공유·재로드 실패 복구, D3D 경고·잔존 객체를 검사한다. 16 primitive fixture는 순차/병렬 임포트의 렌더 픽셀 일치를 검사한다. Quinn 에셋이 없으면 해당 조건부 테스트 하나가 빠진다.
 
 포함한 외부 라이브러리는 `third_party/cgltf`, `third_party/stb`, `third_party/json`에 있다. 세 라이브러리의 MIT 라이선스 표기는 각 헤더에 보존했다.

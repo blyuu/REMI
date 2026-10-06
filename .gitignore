@@ -48,3 +48,8 @@ desktop.ini
 # Locally exported Unreal template character; generated source binary.
 /assets/Quinn/*.rmc
 /assets/characters/*.rmc
+
+# User-supplied village GLB (large external asset, local prototype only).
+/Mountain_Surrounded_Village_Environment-62667742/
+/FREE_Post_Apocalypse_Survivor_Environment_Kitbash_set-93d57f55/
+/Survival_Character-11d20d01/

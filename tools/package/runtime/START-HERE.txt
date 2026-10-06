@@ -32,6 +32,6 @@ Run-Smoke-Tests.cmd는 창을 표시하지 않고 WARP 소프트웨어 렌더러
 
 BUILD-INFO.json: 빌드와 소스 식별 정보
 MANIFEST-SHA256.csv: 파일별 무결성 해시
-THIRD-PARTY-NOTICES.txt 및 assets\fonts\LICENSE.txt: 외부 구성 요소 고지
+THIRD-PARTY-NOTICES.txt 및 assets\fonts\*OFL.txt / LICENSE.txt: 외부 구성 요소 고지
 
 소스 스냅샷 ZIP은 별도입니다. 실행에는 필요하지 않습니다.

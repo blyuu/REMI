@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$OutputDirectory = ''
 )
 $ErrorActionPreference = 'Stop'
@@ -80,6 +80,7 @@ Invoke-BuildStep 'install' 'cmake' @('--install','build/portable','--config','Re
 $required = @(
     'REMIGravity.exe','REMIRelay.exe','REMISandbox.exe','shaders/Basic.hlsl',
     'gravity.project.json','assets/fonts/Pretendard-SemiBold.otf','assets/fonts/LICENSE.txt',
+    'assets/fonts/NotoSansKR-VF.ttf','assets/fonts/NotoSansKR-OFL.txt',
     'samples/static_triangle.glb','samples/sample.png','START-HERE.txt',
     'Play-Gravity.cmd','Play-Relay.cmd','Open-Inspector.cmd','Run-Smoke-Tests.cmd',
     'THIRD-PARTY-NOTICES.txt'
@@ -172,13 +173,8 @@ try {
         $stdout = Join-Path $verifyRoot ($check.Name + '.stdout.log')
         $stderr = Join-Path $verifyRoot ($check.Name + '.stderr.log')
         $process = Start-Process -FilePath (Join-Path $externalPackage $check.Exe) `
-            -ArgumentList $check.Args -WorkingDirectory $workRoot -PassThru -WindowStyle Hidden `
+            -ArgumentList $check.Args -WorkingDirectory $workRoot -Wait -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        if (-not $process.WaitForExit(60000)) {
-            $process.Kill()
-            throw "$($check.Name) exceeded 60 seconds"
-        }
-        $process.Refresh()
         if ($process.ExitCode -ne 0) {
             $detail = ((Get-Content -LiteralPath $stdout -Tail 20) +
                 (Get-Content -LiteralPath $stderr -Tail 20)) -join [Environment]::NewLine

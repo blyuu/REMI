@@ -4,7 +4,7 @@
 
 **C++20 · DirectX 11 · HLSL · Windows x64**
 
-REMI는 렌더링, 장면, 리소스, 물리, 수명 관리를 직접 구현하며 확장하는 소형 게임 엔진입니다. `REMIGravity`는 중력 반전 퍼즐, `REMIRelay`는 장애물을 돌아 스위치를 켠 뒤 제한 시간 안에 출구에 도착하는 별도 게임입니다.
+REMI는 렌더링, 장면, 리소스, 물리, 수명 관리를 직접 구현하며 확장하는 소형 게임 엔진입니다. `REMIGravity`는 중력 반전 퍼즐, `REMIRelay`는 스위치와 제한 시간이 있는 별도 게임입니다. `REMIVillage` 실행 파일은 현재 로컬 포스트아포칼립스 맵과 Survival Character를 사용하는 3인칭 탐험 프로토타입입니다.
 
 ![REMI Gravity Run 플레이 데모](media/gravity-run-demo.gif)
 
@@ -15,7 +15,8 @@ REMI는 렌더링, 장면, 리소스, 물리, 수명 관리를 직접 구현하�
 | 렌더링 | D3D11 RHI 버퍼·텍스처·파이프라인·명령·오프스크린 타깃, 변경 감지 ShaderCache, Standard/Unlit/Toon 셰이딩, 방향광, 2048² shadow map과 3×3 PCF, static mesh 프러스텀 컬링 |
 | 장면·리소스 | 계층 Transform, 세대 검증 EntityId, 선형 시간 서브트리 삭제, 핸들 기반 Mesh/파일 캐시와 실패 복구 reload |
 | 에셋·캐릭터 | 런타임 glTF/GLB 메시·기본색 텍스처·재질 임포트, `.remimat` 재질 파일, CPU 본 스키닝·클립 전환 상태 머신, 기존 RMCH 베이크 애니메이션 |
-| 게임·진단 | AABB 물리, Gravity/Relay 게임, Pretendard HUD, Sandbox 위치 Inspector, CPU/GPU CSV와 재현 벤치마크, D3D debug layer 검사 |
+| 멀티스레딩 | 종료 시 대기 중인 작업을 마치는 CPU Job System; Apocalypse 건물·캐릭터 glTF의 primitive별 정점·인덱스 준비를 워커에 분배하고 D3D11 업로드는 메인 스레드에서 수행 |
+| 게임·진단 | AABB 물리, Gravity/Relay 게임과 로컬 Apocalypse 프로토타입, Noto Sans KR 설정 UI, Sandbox 위치 Inspector, CPU/GPU CSV와 재현 벤치마크, D3D debug layer 검사 |
 
 현재 셰이더의 `metallic`·`roughness`는 **간이 조명 모델의 조정값**입니다. RHI가 리소스·드로 명령과 swap chain 표면을 담당하며, 기본 그림자 타깃·GPU 진단은 아직 D3D11 전용입니다. glTF 본 스키닝은 CPU에서 계산하며 PBR·IBL·GPU 스키닝·콘솔 지원은 아직 없습니다.
 
@@ -60,6 +61,27 @@ build\vs2022-x64\bin\Debug\REMIRelay.exe
 기본 코스 외에 `REMIGravity.exe --level 2`로 같은 엔진·게임 규칙을 재사용한 두 번째 코스를 실행할 수 있습니다. `--project`의 레벨 값을 바탕으로 발판 너비와 천장 높이를 조정합니다. 물리 계산은 엔진 `PhysicsWorld`, 중력 방향 전환은 `GravityControl`, 코인·승패 판정은 게임의 `GravityRules`에 분리했습니다.
 
 `REMIRelay`는 `WASD` 이동, 우클릭 드래그 카메라, 휠 확대/축소, `Enter` 재시작, `Esc` 종료를 사용합니다. 청록색 스위치를 먼저 밟고 초록색 출구에 가면 성공합니다. 이 게임은 공통 Scene·Physics·Renderer·박스 메시 생성 경로를 사용하지만 자체 레벨 구성과 `RelayRules`를 가집니다. `--smoke --warp`로 자동 경로와 렌더링을 확인할 수 있습니다.
+
+세 게임의 조작 안내는 화면 오른쪽 위 **설정** 아이콘을 눌렀을 때만 표시됩니다. 안내 패널과 Relay 상태 카드에는 Noto Sans KR을 사용합니다. Gravity의 게임 상태 HUD도 같은 색 계열로 맞췄습니다.
+
+### 로컬 3인칭 포스트아포칼립스 탐험 프로토타입
+
+실행 파일 이름은 호환성을 위해 `REMIVillage.exe`를 유지하지만 게임 화면과 기본 장면은 **REMI Apocalypse**로 바꿨습니다. 로컬 `FREE_Post_Apocalypse_Survivor_Environment_Kitbash_set-93d57f55`의 건물 FBX와 `Survival_Character-11d20d01`의 캐릭터 FBX를 Blender 5.1로 변환합니다. 건물 하나를 공유 메시로 네 곳에 배치하고 도로·바닥·거친 충돌 프록시를 코드에서 구성합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-apocalypse-assets.ps1
+cmake --build --preset release --target REMIVillage
+Play-Apocalypse.cmd
+build\vs2022-x64\bin\Release\REMIVillage.exe --smoke --warp
+```
+
+`Play-Apocalypse.cmd`는 생성된 GLB가 없으면 변환을 실행하고, exe가 없으면 Release 빌드를 실행합니다. `Play-Village.cmd`도 호환용 별칭으로 남겨뒀습니다. `WASD`는 카메라 방향 기준 이동, `Shift`는 달리기, `Space`는 점프, 마우스 이동은 카메라 회전, 휠은 줌입니다. `Esc`로 커서를 꺼내 오른쪽 위 **설정** 아이콘을 클릭하면 조작 안내가 열립니다. 설정을 닫고 빈 곳을 클릭하면 게임으로 돌아가고, 커서가 나온 상태에서 `Esc`를 한 번 더 누르면 종료합니다. 게임 창에서 다른 창으로 전환해도 커서를 돌려줍니다.
+
+Survival Character 원본 FBX에는 애니메이션 클립과 실제 텍스처 파일이 들어 있지 않아 변환 도구가 원본 리그에 간단한 `idle`/`run` 동작을 만들고 FBX 재질 색으로 GLB를 내보냅니다. `.glb/.gltf` 또는 기존 `.rmc`를 `--character <파일>`로 지정할 수 있으며 `--no-character`는 박스 캐릭터로 실행합니다.
+
+Apocalypse의 정적 GLB 및 캐릭터 임포트는 최대 8개 워커(기본값: 논리 프로세서 수보다 하나 적게)를 사용하는 `JobSystem`에 primitive별 정점 좌표·인덱스 변환을 분배합니다. 준비된 결과를 모두 받은 뒤 렌더 스레드에서 GPU 메시·텍스처를 만들고 Scene/캐시를 변경합니다. 현재 Job System은 범용 프레임 그래프나 병렬 렌더러가 아닙니다. 작업의 예외는 `future`로 호출자에게 전달되며 풀을 파괴할 때 제출된 작업을 끝낸 뒤 스레드를 합칩니다. 작은 에셋은 Job System 없이 기존 순차 경로도 사용할 수 있습니다. [구현·동기화 경계](docs/Architecture.md)를 참고하세요.
+
+건물은 시각용 정적 메시이고 바닥과 네 건물의 충돌은 수작업 AABB 프록시입니다. 작은 잔해와 건물 내부 충돌은 아직 없습니다. 건물의 어두운 컬러 아틀라스를 기본색 텍스처로 쓰지만 법선 맵·완전한 PBR 조명은 지원하지 않아 원본 외형과 차이가 있습니다. 원본 FBX와 변환된 GLB는 저장소 및 배포 ZIP에 포함하지 않으며, 이 외부 에셋이 필요한 `REMIVillage`도 배포 ZIP 대상에서 제외했습니다.
 
 두 게임은 `SceneRenderSession`으로 렌더러·메시 캐시 수명과 그림자/색상 패스 조립을 공유합니다. 각 게임의 카메라, HUD, 애니메이션과 규칙은 별도 코드에 남겨 두었습니다.
 

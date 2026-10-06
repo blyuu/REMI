@@ -97,7 +97,7 @@ struct GameHud::Impl {
             const float coverage = static_cast<float>(std::max({mask[index],mask[index+1],mask[index+2]}))/255.f;
             if (coverage < .1f) continue;
             // Text sits on an opaque HUD panel; shade edge pixels for antialiasing.
-            const remi::Vec3 background{.027f,.044f,.07f};
+            const remi::Vec3 background{.075f,.105f,.11f};
             Quad(x+col,y+row,1,1,{background.x+(color.x-background.x)*coverage,
                                   background.y+(color.y-background.y)*coverage,
                                   background.z+(color.z-background.z)*coverage},.01f);
@@ -115,19 +115,17 @@ void GameHud::Update(remi::Renderer& renderer,unsigned width,unsigned height,con
     ui.vertices.clear(); ui.indices.clear();
     if (width < 640 || height < 360) { ui.mesh.reset(); return; }
     const float w = static_cast<float>(width), h = static_cast<float>(height);
-    const remi::Vec3 panel{.027f,.044f,.07f};
-    const remi::Vec3 muted{.48f,.60f,.67f};
-    const remi::Vec3 gold{1.f,.66f,.19f};
+    const remi::Vec3 panel{.075f,.105f,.11f};
+    const remi::Vec3 muted{.69f,.76f,.72f};
+    const remi::Vec3 gold{.88f,.67f,.39f};
     ui.Quad(0,0,w,86,panel);
-    ui.Quad(0,83,w,3,{.08f,.22f,.27f},.09f);
-    ui.Quad(0,h-56,w,56,panel);
-    ui.Text(30,17,L"REMI  /  GRAVITY RUN",26,{.90f,.96f,1});
+    ui.Quad(0,83,w,3,{.53f,.72f,.61f},.09f);
+    ui.Text(30,17,L"REMI  /  GRAVITY RUN",26,{.94f,.92f,.84f});
     ui.Text(32,51,L"천장의 코인을 모두 모아 출구로 돌아오세요",17,muted);
     ui.Text(w*.56f,21,L"COINS  " + std::to_wstring(game.Coins()) + L" / " + std::to_wstring(game.TotalCoins()),27,gold);
-    ui.Text(w-260,23,std::wstring(L"MATERIAL  ")+MaterialName(game.PlayerMaterial()),20,{.70f,.85f,.94f});
-    ui.Text(30,h-42,L"WASD 이동    SPACE 중력 반전    Q 재질 선택    ENTER 재시작    F2 디버그",20,{.77f,.87f,.91f});
+    ui.Text(w-360,23,std::wstring(L"MATERIAL  ")+MaterialName(game.PlayerMaterial()),19,muted);
     if (game.Status() == remi::game::State::Playing) {
-        ui.Text(w-255,53,game.Inverted() ? L"GRAVITY  UP" : L"GRAVITY  DOWN",16,muted);
+        ui.Text(w-375,53,game.Inverted() ? L"GRAVITY  UP" : L"GRAVITY  DOWN",16,muted);
     } else {
         const float cardWidth = std::min(510.f,w-80.f), x = (w-cardWidth)*.5f, y = (h-204.f)*.5f;
         ui.Quad(x,y,cardWidth,204,panel,.08f);

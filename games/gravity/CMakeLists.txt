@@ -20,4 +20,6 @@ endif()
 add_custom_command(TARGET REMIGravity POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/Pretendard-SemiBold.otf" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/Pretendard-SemiBold.otf"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/LICENSE.txt" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/LICENSE.txt")
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/LICENSE.txt" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/NotoSansKR-VF.ttf" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/NotoSansKR-VF.ttf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/assets/fonts/NotoSansKR-OFL.txt" "$<TARGET_FILE_DIR:REMIGravity>/assets/fonts/NotoSansKR-OFL.txt")

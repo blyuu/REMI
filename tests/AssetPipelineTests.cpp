@@ -81,6 +81,22 @@ int wmain(int argc, wchar_t** argv) {
             Check(renderer.CheckDiagnostics() == 0,"Static glTF generated D3D warnings");
             scene.Clear(); meshes.Clear();
         }
+        {
+            remi::JobSystem jobs(2);
+            const auto file = fixtures / "parallel_static.gltf";
+            auto serial = remi::assets::GltfAsset::Load(renderer,file);
+            auto parallel = remi::assets::GltfAsset::Load(renderer,file,&jobs);
+            Check(serial->PrimitiveCount() == 16 && parallel->PrimitiveCount() == 16,
+                  "Parallel glTF preparation lost primitives");
+            remi::DirectionalLight light; light.ambient = 1;
+            const auto draw = [&](const remi::assets::GltfAsset& asset) {
+                renderer.BeginFrame({0,0,0});
+                asset.Draw(renderer,remi::Matrix4::Identity(),remi::Matrix4::Identity(),light);
+                auto image = renderer.Readback(); renderer.Present(); return image;
+            };
+            Check(draw(*serial).rgba == draw(*parallel).rgba,
+                  "Parallel glTF preparation changed rendered pixels");
+        }
         const auto report = renderer.ShutdownAndValidate();
         Check(report.liveChildren == 0 && report.priorWarnings == 0,"Asset pipeline leaked D3D objects");
         std::cout << "glTF import, textures, materials, CPU skinning, and static scene passed\n";

@@ -3,6 +3,7 @@
 #include "GameProject.hpp"
 #include "GravityLevelBuilder.hpp"
 #include <remi/debug/DebugOverlay.hpp>
+#include <remi/debug/SettingsMenu.hpp>
 #include <remi/core/Profiler.hpp>
 #include <remi/runtime/Application.hpp>
 #include <remi/render/SceneRenderSession.hpp>
@@ -133,6 +134,10 @@ public:
         animation_ = std::move(animation); playerHandle_ = player;
         gltfAsset_ = std::move(gltfAsset);
         hud_ = std::make_unique<GameHud>(project.font);
+        settings_ = std::make_unique<remi::ui::SettingsMenu>(remi::ExecutableDirectory()/"assets/fonts/NotoSansKR-VF.ttf",L"REMI GRAVITY",
+            std::vector<std::wstring>{L"WASD   이동",L"Space   중력 반전",L"Q   캐릭터 재질 선택",
+                L"마우스 우클릭   카메라 회전",L"마우스 휠   확대 / 축소",
+                L"Enter   다시 시작",L"F2   성능 정보",L"Esc   종료"});
         if (!profileCsv.empty()) {
             csv_.open(profileCsv,std::ios::binary);
             if (!csv_) throw std::runtime_error("Cannot open profile CSV");
@@ -145,7 +150,11 @@ public:
     }
     void OnResize(unsigned w,unsigned h) override { renderer_->Resize(w,h); }
     void OnFixedUpdate(remi::Window& window,const remi::Input& input,double dt) override {
-        if (input.Pressed(remi::Key::Escape)) window.RequestClose();
+        if (input.Pressed(remi::Key::Escape)) {
+            if (settings_->Open()) settings_->SetOpen(false);
+            else window.RequestClose();
+        }
+        if (settings_->HandleClick(input,window.Width(),window.Height()) || settings_->Open()) return;
         const auto physicsStart = remi::CpuProfiler::Clock::now();
         float moveX = float(input.Held(remi::Key::D))-float(input.Held(remi::Key::A));
         float moveZ = float(input.Held(remi::Key::W))-float(input.Held(remi::Key::S));
@@ -214,6 +223,8 @@ public:
         profiler_.Add(remi::CpuStage::Color,colorStart);
         hud_->Update(*renderer_,renderer_->Width(),renderer_->Height(),*game_);
         hud_->Draw(*renderer_);
+        settings_->Update(*renderer_,renderer_->Width(),renderer_->Height());
+        settings_->Draw(*renderer_);
         overlayAge_ += elapsed;
         if (showDebug_) {
             if (overlayAge_ >= .2 || (smoke && frame_ == 4)) {
@@ -259,13 +270,12 @@ public:
         ++frame_;
         const auto state = game_->Status();
         std::wostringstream title;
-        title << L"REMI Gravity | " << (state == remi::game::State::Won ? L"FINISH! Enter to replay" : state == remi::game::State::Lost ? L"FELL! Enter to retry" : L"Collect all coins, then reach the GREEN pad")
-              << L" | Gravity " << (game_->Inverted() ? L"UP" : L"DOWN") << L" | " << (game_->Supported() ? L"Space: flip ready" : L"Airborne")
-              << L" | WASD move / Space flip / Q material / Enter restart / F2 debug / RMB camera / Wheel zoom / Esc";
+        title << L"REMI Gravity | " << (state == remi::game::State::Won ? L"FINISH!" : state == remi::game::State::Lost ? L"FELL!" : L"Collect all coins, then reach the GREEN pad")
+              << L" | Gravity " << (game_->Inverted() ? L"UP" : L"DOWN") << L" | " << (game_->Supported() ? L"Grounded" : L"Airborne");
         window.SetTitle(title.str());
     }
     void OnDetach() noexcept override {
-        overlay_.Clear(); hud_.reset(); game_.reset(); animation_.reset(); gltfAsset_.reset();
+        overlay_.Clear(); settings_->Clear(); settings_.reset(); hud_.reset(); game_.reset(); animation_.reset(); gltfAsset_.reset();
         try { if (render_) { const auto audit = render_->ShutdownAndValidate(); failed = audit.liveChildren != 0 || audit.priorWarnings != 0;
             remi::Log("Game GPU shutdown: live children="+std::to_string(audit.liveChildren)+", warnings="+std::to_string(audit.priorWarnings)); } }
         catch (const std::exception& e) { failed = true; remi::Log(e.what()); }
@@ -281,6 +291,7 @@ private:
     std::unique_ptr<remi::BakedAnimation> animation_;
     std::unique_ptr<remi::assets::GltfAsset> gltfAsset_;
     std::unique_ptr<GameHud> hud_;
+    std::unique_ptr<remi::ui::SettingsMenu> settings_;
     remi::MeshHandle playerHandle_;
     bool running_ = false;
     remi::Camera camera_;
@@ -304,7 +315,7 @@ int wmain(int argc,wchar_t** argv) {
         }
         return name;
     };
-    config.window.title = L"REMI Gravity | WASD move | Space flip | Enter restart | F2 debug";
+    config.window.title = L"REMI Gravity";
     config.window.graphicsSurface = true; config.idleWaitMilliseconds = 0;
     for (int i = 1; i < argc; ++i) {
         const std::wstring_view arg(argv[i]);

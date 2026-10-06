@@ -27,7 +27,7 @@ flowchart TD
 
 | 모듈 | 책임 | 대표 코드 |
 | --- | --- | --- |
-| Core | 시간·입력 상태·수학·핸들·프로파일 데이터 | `engine/include/remi/core/` |
+| Core | 시간·입력 상태·수학·핸들·프로파일 데이터·CPU Job System | `engine/include/remi/core/` |
 | Platform | Win32 창, 메시지, 입력 수집 | `engine/src/platform/Window.cpp` |
 | Runtime | 창 수명, 고정 tick·프레임 콜백, Layer/Overlay 순서와 수명 | `engine/src/runtime/Application.cpp`, `engine/include/remi/runtime/Layer.hpp` |
 | Scene | EntityId, Transform 계층, MeshComponent | `engine/src/scene/Scene.cpp` |
@@ -81,6 +81,19 @@ Win32 메시지/입력 → Application/Layer OnFixedUpdate(0~8회) → Applicati
 ```
 
 `GravityLayer::OnAttach`에서 프로젝트 설정, 셰이더 바이트와 메쉬 캐시, 렌더러, 게임 월드를 구성한다. `OnDetach`에서는 게임·HUD·메시 소유자를 먼저 해제한 다음 렌더러의 D3D 잔존 객체를 검사한다. 소유권 세부 규칙은 [MemoryManagement.md](MemoryManagement.md)에 있다.
+
+## Job System과 스레드 경계
+
+`JobSystem`은 고정 수의 CPU 워커(기본값: `hardware_concurrency - 1`, 최대 8개), 작업 큐, `Submit`의 `future`, 범위별 `ParallelFor`를 제공한다. 작업 중 발생한 예외는 호출자가 `future::get`으로 받는다. `ParallelFor`는 어떤 범위에서 실패해도 제출한 나머지 범위가 끝날 때까지 기다린 뒤 예외를 다시 던진다. 풀 소멸자는 큐에 남은 작업까지 수행하고 모든 워커를 합친다. 워커가 같은 풀의 다른 작업을 기다리는 중첩 사용은 지원하지 않는다.
+
+Apocalypse 프로토타입의 `StaticGltfCache`와 Survival Character 로더는 이 풀을 `GltfAsset::Load`에 전달한다. glTF 파싱과 재질 읽기 이후, primitive별 정점 좌표계 변환·삼각형 winding 변경을 서로 다른 워커/호출 스레드가 수행한다. `ParallelFor`가 완료된 후 메인 스레드에서 D3D11 Mesh·Texture를 만들고 Scene/ResourceCache를 바꾼다. 따라서 Renderer·Scene·ResourceCache의 동시 접근은 허용하지 않는다. 한 primitive인 공유 건물은 순차 준비 경로를 사용하고, 여러 primitive로 구성된 캐릭터가 병렬 준비 경로를 사용한다. 다른 호출자는 풀을 전달하지 않으면 기존 순차 경로를 사용한다.
+
+```text
+메인: glTF 읽기 → [CPU primitive 준비 작업 분배·대기] → D3D11 업로드 → Scene/캐시 반영
+워커:              정점/인덱스 변환 (primitive별 독립 결과)
+```
+
+이는 로딩 중 CPU 준비의 병렬화이며 프레임 업데이트, 스키닝, 렌더 명령 기록의 병렬화는 아니다. `Core.JobSystem`은 실제 동시 실행·예외·종료 시 큐 배출을, `Assets.GltfPipeline`은 순차/병렬 임포트의 렌더 픽셀 일치를 검사한다.
 
 ## 장면과 리소스 경계
 

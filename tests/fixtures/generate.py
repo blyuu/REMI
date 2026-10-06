@@ -84,3 +84,6 @@ def make(skinned: bool) -> None:
 
 make(False)
 make(True)
+parallel = json.loads((ROOT / 'static_triangle.gltf').read_text(encoding='utf-8'))
+parallel['meshes'][0]['primitives'] *= 16
+(ROOT / 'parallel_static.gltf').write_text(json.dumps(parallel, separators=(',', ':')), encoding='utf-8')

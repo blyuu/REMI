@@ -35,7 +35,8 @@ int wmain(int argc, wchar_t** argv) {
         remi::Renderer renderer(config);
         remi::ResourceCache<remi::Mesh> meshes;
         {
-            remi::assets::StaticGltfCache assets(renderer,meshes);
+            remi::JobSystem jobs(2);
+            remi::assets::StaticGltfCache assets(renderer,meshes,&jobs);
             remi::Scene first, second;
             const auto a = assets.Instantiate(first,file);
             const auto b = assets.Instantiate(second,fixture.root/"."/"model.glb");

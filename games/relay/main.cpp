@@ -1,6 +1,6 @@
 #include "RelayGame.hpp"
 #include <remi/core/Log.hpp>
-#include <remi/debug/DebugOverlay.hpp>
+#include <remi/debug/SettingsMenu.hpp>
 #include <remi/render/PrimitiveMesh.hpp>
 #include <remi/render/SceneRenderSession.hpp>
 #include <remi/resources/ResourceCache.hpp>
@@ -44,11 +44,19 @@ public:
             if (game->Result() != remi::relay::Status::Won) throw std::runtime_error("Relay smoke did not reach goal");
         }
         render_ = std::move(session); renderer_ = &render_->Device(); game_ = std::move(game);
+        settings_ = std::make_unique<remi::ui::SettingsMenu>(
+            remi::ExecutableDirectory()/"assets/fonts/NotoSansKR-VF.ttf",L"REMI RELAY",
+            std::vector<std::wstring>{L"WASD   이동",L"마우스 우클릭   카메라 회전",
+                L"마우스 휠   확대 / 축소",L"Enter   다시 시작",L"Esc   종료"});
         camera_.target = {0,0,0}; camera_.yaw = -.3f; camera_.pitch = .48f; camera_.distance = 21;
     }
     void OnResize(unsigned width, unsigned height) override { renderer_->Resize(width,height); }
     void OnFixedUpdate(remi::Window& window, const remi::Input& input, double dt) override {
-        if (input.Pressed(remi::Key::Escape)) window.RequestClose();
+        if (input.Pressed(remi::Key::Escape)) {
+            if (settings_->Open()) settings_->SetOpen(false);
+            else window.RequestClose();
+        }
+        if (settings_->HandleClick(input,window.Width(),window.Height()) || settings_->Open()) return;
         if (!smoke) {
             const float x = float(input.Held(remi::Key::D))-float(input.Held(remi::Key::A));
             const float z = float(input.Held(remi::Key::W))-float(input.Held(remi::Key::S));
@@ -67,22 +75,22 @@ public:
         overlayAge_ += elapsed;
         if (overlayAge_ >= .2 || !overlayReady_) {
             overlayAge_ = 0; overlayReady_ = true;
-            std::ostringstream timer; timer << std::fixed << std::setprecision(1)
-                << "TIME " << std::max(0.f,game_->Remaining()) << " SEC";
-            const std::string status = game_->Result() == remi::relay::Status::Won ? "FINISH - ENTER TO REPLAY" :
-                game_->Result() == remi::relay::Status::TimedOut ? "TIME OUT - ENTER TO RETRY" :
-                game_->Result() == remi::relay::Status::Fell ? "FELL - ENTER TO RETRY" :
-                game_->SwitchActive() ? "SWITCH ACTIVE - REACH GREEN EXIT" : "TOUCH BLUE SWITCH FIRST";
-            const std::vector<std::string> lines{"REMI RELAY  WASD MOVE  RMB CAMERA  ENTER RESTART",timer.str(),status};
-            overlay_.Update(*renderer_,renderer_->Width(),renderer_->Height(),lines);
+            std::wostringstream timer; timer << std::fixed << std::setprecision(1)
+                << L"남은 시간  " << std::max(0.f,game_->Remaining()) << L"초";
+            const std::wstring status = game_->Result() == remi::relay::Status::Won ? L"완료! Enter로 다시 시작" :
+                game_->Result() == remi::relay::Status::TimedOut ? L"시간 종료 · Enter로 다시 시작" :
+                game_->Result() == remi::relay::Status::Fell ? L"추락 · Enter로 다시 시작" :
+                game_->SwitchActive() ? L"스위치 작동 · 초록 출구로 이동" : L"파란 스위치를 먼저 누르세요";
+            settings_->SetStatus({timer.str(),status});
         }
-        overlay_.Draw(*renderer_);
+        settings_->Update(*renderer_,renderer_->Width(),renderer_->Height());
+        settings_->Draw(*renderer_);
         render_->RequireCleanDiagnostics();
         if (!capture.empty() && frame_ == 4) renderer_->SaveScreenshot(capture);
         renderer_->Present(); ++frame_;
     }
     void OnDetach() noexcept override {
-        overlay_.Clear(); game_.reset();
+        settings_->Clear(); settings_.reset(); game_.reset();
         try {
             if (render_) {
                 const auto audit = render_->ShutdownAndValidate();
@@ -96,7 +104,7 @@ private:
     remi::Renderer* renderer_ = nullptr; // Non-owning alias, valid while render_ is alive.
     std::unique_ptr<remi::relay::RelayGame> game_;
     remi::Camera camera_;
-    remi::debug::DebugOverlay overlay_;
+    std::unique_ptr<remi::ui::SettingsMenu> settings_;
     double overlayAge_ = 1;
     bool overlayReady_ = false;
     unsigned frame_ = 0;
@@ -105,7 +113,7 @@ private:
 int wmain(int argc, wchar_t** argv) {
     remi::RunConfig config;
     auto layer = std::make_unique<RelayLayer>(); auto& relay = *layer;
-    config.window.title = L"REMI Relay | WASD move | touch switch | reach exit";
+    config.window.title = L"REMI Relay";
     config.window.graphicsSurface = true; config.idleWaitMilliseconds = 0;
     for (int i = 1; i < argc; ++i) {
         const std::wstring_view arg(argv[i]);
