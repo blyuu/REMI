@@ -33,8 +33,35 @@ struct Window::Impl {
     bool focused = false, minimized = false, resizing = false, changed = false, closed = false;
     bool timeReset = true;
     bool graphicsSurface = false;
+    bool relativeMouse = false, cursorLocked = false;
 
-    ~Impl() { if (handle) DestroyWindow(handle); }
+    void UpdateCursorLock() noexcept {
+        const bool shouldLock = relativeMouse && focused && !minimized && !resizing && handle;
+        if (!shouldLock) {
+            if (cursorLocked) { ClipCursor(nullptr); ShowCursor(TRUE); cursorLocked = false; }
+            return;
+        }
+        RECT rect{};
+        if (!GetClientRect(handle,&rect)) return;
+        POINT topLeft{rect.left,rect.top}, bottomRight{rect.right,rect.bottom};
+        if (!ClientToScreen(handle,&topLeft) || !ClientToScreen(handle,&bottomRight)) return;
+        RECT screen{topLeft.x,topLeft.y,bottomRight.x,bottomRight.y};
+        if (screen.right <= screen.left || screen.bottom <= screen.top) return;
+        if (!cursorLocked) {
+            SetCursorPos((screen.left+screen.right)/2,(screen.top+screen.bottom)/2);
+            ShowCursor(FALSE);
+            cursorLocked = true;
+        }
+        ClipCursor(&screen);
+    }
+    ~Impl() {
+        relativeMouse = false; UpdateCursorLock();
+        RAWINPUTDEVICE device{0x01,0x02,RIDEV_REMOVE,nullptr};
+        RegisterRawInputDevices(&device,1,sizeof(device));
+        if (handle) {
+            DestroyWindow(handle);
+        }
+    }
     static LRESULT CALLBACK Procedure(HWND hwnd, UINT message, WPARAM wp, LPARAM lp) {
         auto* self = reinterpret_cast<Impl*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
         if (message == WM_NCCREATE) {
@@ -46,22 +73,25 @@ struct Window::Impl {
         switch (message) {
         case WM_CLOSE: self->closed = true; return 0;
         case WM_NCDESTROY:
+            self->relativeMouse = false; self->UpdateCursorLock();
             self->handle = nullptr; self->closed = true;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             return DefWindowProcW(hwnd, message, wp, lp);
-        case WM_SETFOCUS: self->focused = true; self->timeReset = true; self->input.Reset(); return 0;
+        case WM_SETFOCUS: self->focused = true; self->timeReset = true; self->input.Reset(); self->UpdateCursorLock(); return 0;
         case WM_KILLFOCUS:
-            self->focused = false; self->timeReset = true; self->input.Reset();
+            self->focused = false; self->timeReset = true; self->input.Reset(); self->UpdateCursorLock();
             if (GetCapture() == hwnd) ReleaseCapture();
             return 0;
-        case WM_ENTERSIZEMOVE: self->resizing = true; self->timeReset = true; self->input.Reset(); return 0;
-        case WM_EXITSIZEMOVE: self->resizing = false; self->timeReset = true; self->input.Reset(); return 0;
+        case WM_ENTERSIZEMOVE: self->resizing = true; self->timeReset = true; self->input.Reset(); self->UpdateCursorLock(); return 0;
+        case WM_EXITSIZEMOVE: self->resizing = false; self->timeReset = true; self->input.Reset(); self->UpdateCursorLock(); return 0;
         case WM_SIZE:
             self->timeReset = true;
             self->minimized = wp == SIZE_MINIMIZED;
             self->width = LOWORD(lp); self->height = HIWORD(lp); self->changed = true;
             if (self->minimized) self->input.Reset();
+            self->UpdateCursorLock();
             return 0;
+        case WM_MOVE: self->UpdateCursorLock(); return 0;
         case WM_DPICHANGED: {
             const auto* rect = reinterpret_cast<RECT*>(lp);
             SetWindowPos(hwnd, nullptr, rect->left, rect->top, rect->right - rect->left,
@@ -74,8 +104,19 @@ struct Window::Impl {
             if (message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) break;
             return 0;
         case WM_MOUSEMOVE:
-            if (self->focused) self->input.MoveMouse(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
+            if (self->focused && !self->relativeMouse) self->input.MoveMouse(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             return 0;
+        case WM_INPUT:
+            if (self->focused && self->relativeMouse) {
+                RAWINPUT raw{};
+                UINT size = sizeof(raw);
+                const UINT read = GetRawInputData(reinterpret_cast<HRAWINPUT>(lp),RID_INPUT,
+                    &raw,&size,sizeof(RAWINPUTHEADER));
+                if (read != static_cast<UINT>(-1) && raw.header.dwType == RIM_TYPEMOUSE &&
+                    !(raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE))
+                    self->input.AddMouseDelta(raw.data.mouse.lLastX,raw.data.mouse.lLastY);
+            }
+            break;
         case WM_MOUSEWHEEL:
             if (self->focused) self->input.AddWheel(static_cast<float>(GET_WHEEL_DELTA_WPARAM(wp)) / WHEEL_DELTA);
             return 0;
@@ -161,6 +202,15 @@ bool Window::ConsumeTimeReset() noexcept {
     const bool reset = impl_->timeReset; impl_->timeReset = false; return reset;
 }
 void Window::SetTitle(const std::wstring& title) { SetWindowTextW(impl_->handle, title.c_str()); }
+void Window::SetRelativeMouseMode(bool enabled) {
+    if (impl_->relativeMouse == enabled) return;
+    RAWINPUTDEVICE device{0x01,0x02,enabled ? DWORD(0) : DWORD(RIDEV_REMOVE),
+        enabled ? impl_->handle : nullptr};
+    if (!RegisterRawInputDevices(&device,1,sizeof(device))) throw WinError("RegisterRawInputDevices");
+    impl_->relativeMouse = enabled;
+    impl_->input.Reset();
+    impl_->UpdateCursorLock();
+}
 std::filesystem::path ExecutableDirectory() {
     std::wstring path(32768, L'\0');
     const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));

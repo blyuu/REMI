@@ -1,6 +1,7 @@
 #pragma once
 #include <remi/animation/AnimStateMachine.hpp>
 #include <remi/animation/Animator.hpp>
+#include <remi/core/JobSystem.hpp>
 #include <remi/render/Renderer.hpp>
 #include <remi/resources/ResourceCache.hpp>
 #include <remi/scene/Scene.hpp>
@@ -12,7 +13,8 @@ namespace remi::assets {
 // Owns its GPU meshes; destroy this before the Renderer.
 class GltfAsset {
 public:
-    [[nodiscard]] static std::unique_ptr<GltfAsset> Load(Renderer& renderer, const std::filesystem::path& file);
+    [[nodiscard]] static std::unique_ptr<GltfAsset> Load(Renderer& renderer, const std::filesystem::path& file,
+                                                         JobSystem* jobs = nullptr);
     [[nodiscard]] bool HasSkeleton() const noexcept { return model_.HasSkeleton(); }
     [[nodiscard]] std::size_t PrimitiveCount() const noexcept { return primitives_.size(); }
     [[nodiscard]] const MaterialProperties& MaterialAt(std::size_t primitive) const { return primitives_.at(primitive).material; }

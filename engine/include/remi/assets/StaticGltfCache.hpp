@@ -8,7 +8,7 @@ namespace remi::assets {
 // Unload/Clear (or this object's destructor) explicitly invalidates those handles.
 class StaticGltfCache {
 public:
-    StaticGltfCache(Renderer& renderer, ResourceCache<Mesh>& meshes);
+    StaticGltfCache(Renderer& renderer, ResourceCache<Mesh>& meshes, JobSystem* jobs = nullptr);
     ~StaticGltfCache();
     StaticGltfCache(const StaticGltfCache&) = delete;
     StaticGltfCache& operator=(const StaticGltfCache&) = delete;
@@ -29,6 +29,7 @@ private:
     [[nodiscard]] static std::string Key(const std::filesystem::path& file);
     Renderer& renderer_;
     ResourceCache<Mesh>& meshes_;
+    JobSystem* jobs_;
     std::string prefix_;
     std::map<std::string,Record> records_;
 };

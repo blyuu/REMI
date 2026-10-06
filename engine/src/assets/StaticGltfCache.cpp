@@ -3,8 +3,8 @@
 #include <stdexcept>
 
 namespace remi::assets {
-StaticGltfCache::StaticGltfCache(Renderer& renderer, ResourceCache<Mesh>& meshes)
-    : renderer_(renderer), meshes_(meshes) {
+StaticGltfCache::StaticGltfCache(Renderer& renderer, ResourceCache<Mesh>& meshes, JobSystem* jobs)
+    : renderer_(renderer), meshes_(meshes), jobs_(jobs) {
     static std::atomic_uint64_t next{1};
     prefix_ = "static-gltf:" + std::to_string(next.fetch_add(1)) + ":";
 }
@@ -16,7 +16,7 @@ std::string StaticGltfCache::Key(const std::filesystem::path& file) {
 StaticGltfCache::Record& StaticGltfCache::Load(const std::filesystem::path& file) {
     const auto key = Key(file);
     if (const auto found = records_.find(key); found != records_.end()) return found->second;
-    auto asset = GltfAsset::Load(renderer_,file);
+    auto asset = GltfAsset::Load(renderer_,file,jobs_);
     if (asset->HasSkeleton()) throw std::invalid_argument("Static cache does not support animated assets");
     auto [entry,inserted] = records_.try_emplace(key);
     (void)inserted;
@@ -60,7 +60,7 @@ std::vector<EntityId> StaticGltfCache::Instantiate(Scene& scene, const std::file
 void StaticGltfCache::Reload(const std::filesystem::path& file) {
     const auto found = records_.find(Key(file));
     if (found == records_.end()) { (void)Load(file); return; }
-    auto replacement = GltfAsset::Load(renderer_,file);
+    auto replacement = GltfAsset::Load(renderer_,file,jobs_);
     auto& record = found->second;
     if (replacement->HasSkeleton() || replacement->primitives_.size() != record.handles.size())
         throw std::invalid_argument("Reload requires the same static primitive count; unload/reinstantiate for topology changes");

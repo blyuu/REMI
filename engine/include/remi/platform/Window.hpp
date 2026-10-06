@@ -33,6 +33,9 @@ public:
     [[nodiscard]] bool ConsumeTimeReset() noexcept;
     void RequestClose() noexcept;
     void SetTitle(const std::wstring& title);
+    // Focused gameplay uses raw mouse deltas; cursor is hidden and confined
+    // to the client area, then restored on focus loss or disable.
+    void SetRelativeMouseMode(bool enabled);
     [[nodiscard]] Input& Inputs() noexcept;
 private:
     struct Impl;

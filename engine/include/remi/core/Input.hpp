@@ -25,6 +25,7 @@ public:
         if (mouseKnown_) { deltaX_ += x - mouseX_; deltaY_ += y - mouseY_; }
         mouseX_ = x; mouseY_ = y; mouseKnown_ = true;
     }
+    void AddMouseDelta(int dx, int dy) noexcept { deltaX_ += dx; deltaY_ += dy; }
     void AddWheel(float steps) noexcept { wheel_ += steps; }
     [[nodiscard]] int MouseX() const noexcept { return mouseX_; }
     [[nodiscard]] int MouseY() const noexcept { return mouseY_; }

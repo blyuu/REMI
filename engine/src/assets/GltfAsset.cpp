@@ -29,29 +29,80 @@ MaterialProperties Convert(const gltf::Material& source) {
     value.roughness = std::clamp(source.roughness, .04f, 1.f);
     return value;
 }
+void ApplyMetallicRoughnessSummary(MaterialProperties& properties, const ImageRGBA& image) {
+    // The renderer currently stores scalar material values. Sample the glTF
+    // roughness (G) and metallic (B) channels so textured nonmetals do not
+    // inherit glTF's metallicFactor=1 default and wash out their base color.
+    const auto count = static_cast<std::size_t>(image.width) * image.height;
+    if (!count || image.pixels.size() < count * 4) return;
+    const auto step = std::max<std::size_t>(1,count / 4096);
+    std::uint64_t roughness = 0, metallic = 0, samples = 0;
+    for (std::size_t i = 0; i < count; i += step) {
+        roughness += image.pixels[i*4+1];
+        metallic += image.pixels[i*4+2];
+        ++samples;
+    }
+    properties.metallic *= static_cast<float>(metallic) / (255.f * static_cast<float>(samples));
+    properties.roughness = std::clamp(properties.roughness *
+        static_cast<float>(roughness) / (255.f * static_cast<float>(samples)),.04f,1.f);
 }
-std::unique_ptr<GltfAsset> GltfAsset::Load(Renderer& renderer, const std::filesystem::path& file) {
+}
+std::unique_ptr<GltfAsset> GltfAsset::Load(Renderer& renderer, const std::filesystem::path& file, JobSystem* jobs) {
     auto asset = std::unique_ptr<GltfAsset>(new GltfAsset());
     if (!gltf::Load(Utf8(file), asset->model_)) throw std::runtime_error("Could not import glTF: " + Utf8(file));
     asset->animator_.SetModel(&asset->model_);
     asset->primitives_.reserve(asset->model_.primitives.size());
+    std::vector<MaterialProperties> materialProperties;
+    materialProperties.reserve(asset->model_.materials.size());
+    for (const auto& material : asset->model_.materials) {
+        auto properties = Convert(material);
+        if (material.metallicRoughnessImage >= 0) {
+            const auto& image = asset->model_.images[static_cast<std::size_t>(material.metallicRoughnessImage)];
+            if (!image.data.empty()) ApplyMetallicRoughnessSummary(properties,DecodeImage(image.data));
+            else if (!image.uri.empty()) {
+                const auto relative = std::filesystem::path(std::u8string(image.uri.begin(),image.uri.end()));
+                ApplyMetallicRoughnessSummary(properties,LoadImage(file.parent_path() / relative));
+            }
+        }
+        materialProperties.push_back(properties);
+    }
+    struct PreparedPrimitive {
+        std::vector<Vertex> vertices;
+        std::vector<std::uint32_t> indices;
+    };
+    std::vector<PreparedPrimitive> prepared(asset->model_.primitives.size());
+    const auto prepare = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const auto& source = asset->model_.primitives[i];
+            if (source.vertices.empty() || source.indices.empty()) continue;
+            auto& output = prepared[i]; // Each job owns a distinct vector pair.
+            output.vertices.reserve(source.vertices.size());
+            for (const auto& vertex : source.vertices) output.vertices.push_back(Convert(vertex));
+            output.indices = source.indices;
+            for (std::size_t triangle = 0; triangle + 2 < output.indices.size(); triangle += 3)
+                std::swap(output.indices[triangle + 1], output.indices[triangle + 2]);
+        }
+    };
+    if (jobs && prepared.size() > 1) {
+        const auto grain = std::max<std::size_t>(1,prepared.size() / (jobs->WorkerCount() * 4));
+        jobs->ParallelFor(prepared.size(),grain,prepare);
+    }
+    else prepare(0,prepared.size());
+    // D3D11 resources, texture sharing and cache mutations stay on the caller thread.
     std::map<std::string,const Mesh*> textureSources;
     for (std::size_t i = 0; i < asset->model_.primitives.size(); ++i) {
         const auto& source = asset->model_.primitives[i];
         if (source.vertices.empty() || source.indices.empty()) continue;
         Primitive primitive;
         primitive.sourceIndex = i;
-        primitive.scratch.reserve(source.vertices.size());
-        for (const auto& vertex : source.vertices) primitive.scratch.push_back(Convert(vertex));
-        auto indices = source.indices;
-        for (std::size_t triangle = 0; triangle + 2 < indices.size(); triangle += 3)
-            std::swap(indices[triangle + 1], indices[triangle + 2]);
+        primitive.scratch = std::move(prepared[i].vertices);
+        auto indices = std::move(prepared[i].indices);
         primitive.mesh = source.hasSkin
             ? renderer.CreateDynamicMesh(primitive.scratch, indices)
             : renderer.CreateMesh(primitive.scratch, indices);
         if (source.material >= 0) {
             const auto& material = asset->model_.materials[static_cast<std::size_t>(source.material)];
-            primitive.material = Convert(material);
+            primitive.material = materialProperties[static_cast<std::size_t>(source.material)];
             const auto overrideFile = file.parent_path() / "materials" /
                 (file.stem().wstring() + L"_" + std::to_wstring(source.material) + L".remimat");
             std::filesystem::path overrideTexture;
