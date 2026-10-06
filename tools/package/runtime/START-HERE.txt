@@ -1,0 +1,37 @@
+REMI Engine 0.11.0 - Windows x64 Portable
+=======================================
+
+ZIP을 먼저 전부 압축 해제한 뒤 아래 파일을 실행하세요.
+
+  Play-Gravity.cmd   중력 반전 퍼즐
+  Play-Relay.cmd     스위치를 켜고 출구로 이동하는 게임
+  Open-Inspector.cmd Sandbox의 엔티티 위치 편집 도구
+
+Windows 10/11 x64, Direct3D 11 feature level 11.0 환경이 필요합니다.
+개발 도구나 Visual C++ Redistributable 설치 없이 실행하도록 /MT로 빌드했습니다.
+exe, shaders, assets, gravity.project.json을 같은 폴더 구성으로 유지하세요.
+이 배포본의 Gravity는 박스 플레이어를 사용합니다. 로컬 Quinn 캐릭터는 포함하지 않습니다.
+
+Gravity: WASD 이동, Space 접촉 중 중력 반전, Q 재질, Enter 재시작.
+Relay: WASD 이동, 청록 스위치를 밟고 제한 시간 안에 초록 출구로 이동, Enter 재시작.
+공통: 우클릭 드래그 카메라 회전, 휠 확대/축소, Esc 종료.
+Gravity의 F2는 성능 표시, F5는 셰이더 재로드입니다.
+
+Inspector: F3 열기/닫기, 위/아래 선택, Ctrl+방향키 로컬 X/Y 이동,
+Shift+왼쪽/오른쪽 Z 이동. 열린 동안 시뮬레이션은 멈춥니다.
+편집은 저장되지 않습니다. F5는 동봉한 정적 glTF를 다시 읽습니다.
+
+실행 버튼은 logs 폴더에 로그를 기록합니다. 오류가 나면 로그를 표시합니다.
+Run-Smoke-Tests.cmd는 창을 표시하지 않고 WARP 소프트웨어 렌더러로 검사합니다.
+그래픽 드라이버 문제를 구분할 때 사용하세요.
+
+추가 명령 예시 (이 폴더에서 터미널 실행):
+  REMIGravity.exe --level 2
+  REMIGravity.exe --warp
+  REMISandbox.exe --inspector --static-gltf samples\static_triangle.glb
+
+BUILD-INFO.json: 빌드와 소스 식별 정보
+MANIFEST-SHA256.csv: 파일별 무결성 해시
+THIRD-PARTY-NOTICES.txt 및 assets\fonts\LICENSE.txt: 외부 구성 요소 고지
+
+소스 스냅샷 ZIP은 별도입니다. 실행에는 필요하지 않습니다.

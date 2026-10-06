@@ -1,4 +1,5 @@
 #include <remi/physics/PhysicsWorld.hpp>
+#include <remi/physics/GravityControl.hpp>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -10,6 +11,7 @@ int main() {
         {
             remi::Scene freeScene; remi::PhysicsWorld freeWorld(freeScene);
             const auto id = freeScene.Create(); freeWorld.AddBody(id,{remi::BodyType::Dynamic});
+            Check(!remi::TryReverseGravity(freeWorld,id),"Airborne reverse was accepted");
             for (unsigned i = 0; i < 60; ++i) freeWorld.Step(1.f/60);
             Check(Near(freeWorld.Velocity(id).y,-9.81f) && Near(freeScene.Get<remi::TransformComponent>(id)->position.y,-4.98675f),"Semi-implicit fixed-step integration failed");
         }
@@ -29,6 +31,17 @@ int main() {
             b.collisionLayer = 4; custom.AddBody(ignored,b); custom.Step(1.f/120);
             Check(custom.Contacts().empty(),"Collision mask did not filter body pair");
         }
+        {
+            remi::Scene sidewaysScene;
+            remi::PhysicsSettings settings; settings.gravity = {9.81f,0,0};
+            remi::PhysicsWorld sideways(sidewaysScene,settings);
+            const auto id = sidewaysScene.Create();
+            sideways.AddBody(id,{remi::BodyType::Dynamic});
+            sideways.SetVelocity(id,{3,4,5});
+            Check(remi::TryReverseGravity(sideways,id,false) && Near(sideways.Gravity().x,-9.81f) &&
+                  Near(sideways.Velocity(id).x,0) && Near(sideways.Velocity(id).y,4) &&
+                  Near(sideways.Velocity(id).z,5),"Sideways gravity reverse cleared tangent motion");
+        }
         remi::Scene scene; remi::PhysicsWorld physics(scene);
         const auto box = [&](remi::Vec3 p,remi::Vec3 extent,remi::BodyType type) {
             const auto id = scene.Create(); scene.Get<remi::TransformComponent>(id)->position = p;
@@ -39,8 +52,12 @@ int main() {
         for (unsigned i = 0; i < 300; ++i) physics.Step(1.f/60);
         Check(Near(scene.Get<remi::TransformComponent>(body)->position.y,.5f) && Near(physics.Velocity(body).y,0) && physics.Supported(body),"Floor settling failed");
         const auto ceiling = box({0,5.5f,0},{10,.5f,10},remi::BodyType::Static);
-        physics.SetGravity({0,9.81f,0});
+        physics.SetVelocity(body,{2,-3,1});
+        Check(remi::TryReverseGravity(physics,body) && Near(physics.Gravity().y,9.81f) &&
+              Near(physics.Velocity(body).x,2) && Near(physics.Velocity(body).y,0) &&
+              Near(physics.Velocity(body).z,1),"Reusable gravity reverse lost tangential velocity");
         Check(!physics.Supported(body),"Gravity change retained stale support");
+        physics.SetVelocity(body,{});
         for (unsigned i = 0; i < 300; ++i) physics.Step(1.f/60);
         Check(Near(scene.Get<remi::TransformComponent>(body)->position.y,4.5f) && physics.Supported(body),"Inverted gravity ceiling failed");
         (void)floor; (void)ceiling;

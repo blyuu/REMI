@@ -5,7 +5,7 @@
 namespace remi {
 enum class Key : std::size_t {
     Escape, Space, Enter, W, A, S, D, Q, E, Up, Down, Left, Right,
-    Shift, Control, F1, F2, F5, MouseLeft, MouseRight, MouseMiddle, Count
+    Shift, Control, F1, F2, F3, F5, MouseLeft, MouseRight, MouseMiddle, Count
 };
 
 // Edges accumulate until a fixed tick consumes them, even across render frames.

@@ -5,6 +5,8 @@
 #include <remi/render/SceneRenderer.hpp>
 #include <remi/resources/ResourceManager.hpp>
 #include <remi/physics/PhysicsWorld.hpp>
+#include <remi/assets/StaticGltfCache.hpp>
+#include <remi/debug/SceneInspector.hpp>
 #include <cmath>
 #include <array>
 #include <sstream>
@@ -49,8 +51,8 @@ std::unique_ptr<remi::Mesh> Floor(remi::Renderer& renderer) {
 
 class Sandbox final : public remi::Application {
 public:
-    bool smoke = false, warp = false;
-    std::filesystem::path capture;
+    bool smoke = false, warp = false, inspect = false;
+    std::filesystem::path capture, staticGltf;
     void OnStart(remi::Window& window) override {
         const auto info = remi::GetBuildInfo();
         remi::Log(std::string("Sandbox ") + std::string(info.version) + " / " + std::string(info.configuration));
@@ -99,10 +101,25 @@ public:
         renderer_ = std::move(renderer); meshes_ = std::move(meshes); cube_ = cube; resources_ = std::move(resources);
         scene_ = std::move(scene); group_ = group; extras_ = std::move(extras);
         physics_ = std::move(physics); falling_ = falling;
+        assets_ = std::make_unique<remi::assets::StaticGltfCache>(*renderer_,*meshes_);
+        if (!staticGltf.empty()) (void)assets_->Instantiate(*scene_,staticGltf);
+        inspector_.SetVisible(inspect);
+        inspector_.Update(*scene_,{},0);
     }
     void OnResize(unsigned width, unsigned height) override { renderer_->Resize(width, height); }
     void OnFixedUpdate(remi::Window& window, const remi::Input& input, double step) override {
         if (input.Pressed(remi::Key::Escape)) window.RequestClose();
+        inspector_.Update(*scene_,input,static_cast<float>(step));
+        if (input.Pressed(remi::Key::F5) && !staticGltf.empty()) {
+            try { assets_->Reload(staticGltf); remi::Log("Static glTF reloaded; instance handles preserved"); }
+            catch (const std::exception& error) { remi::Log(std::string("Static reload failed; previous asset retained: ")+error.what()); }
+        }
+        if (inspector_.Visible()) {
+            if (input.Held(remi::Key::MouseRight)) camera_.Orbit(static_cast<float>(input.DeltaX()),static_cast<float>(input.DeltaY()));
+            camera_.Zoom(input.Wheel());
+            previousAngle_ = angle_;
+            return;
+        }
         if (input.Pressed(remi::Key::Space)) spinning_ = !spinning_;
         if (input.Pressed(remi::Key::F1)) camera_ = remi::Camera{};
         if (input.Pressed(remi::Key::Q) && extras_.size() < 32) {
@@ -143,6 +160,7 @@ public:
             return meshes_->Get(key);
         }, &light);
         if (stats.missing) throw std::logic_error("Scene contains an unresolved mesh key");
+        inspector_.Draw(*renderer_,*scene_);
         if (smoke && frames_ == 4) remi::Log("Render passes: shadow draws=" + std::to_string(shadowStats.draws) +
             ", color draws=" + std::to_string(stats.draws) + ", color culled=" + std::to_string(stats.culled));
         if (!capture.empty() && frames_ == 4) renderer_->SaveScreenshot(capture);
@@ -153,12 +171,12 @@ public:
             titleTimer_ = 0;
             std::wostringstream title;
             title << L"REMI Phase 7 | Contacts " << physics_->Stats().contacts << L" / Supported " << physics_->Supported(falling_) << L" / Draws " << stats.draws << L" / Shadow " << shadowStats.draws
-                  << L" | Enter drop cube | Q add / E delete | RMB orbit / Wheel zoom / WASD pan / Space pause / F1 reset / Esc";
+                  << L" | Enter drop cube | Q add / E delete | F3 Inspector | F5 reload asset | RMB orbit / Wheel zoom / WASD pan / Space pause / F1 reset / Esc";
             window.SetTitle(title.str());
         }
     }
     void OnStop() noexcept override {
-        extras_.clear(); physics_.reset(); scene_.reset(); meshes_.reset(); resources_.reset();
+        inspector_.Clear(); extras_.clear(); physics_.reset(); scene_.reset(); assets_.reset(); meshes_.reset(); resources_.reset();
         try {
             if (renderer_) {
                 const auto audit = renderer_->ShutdownAndValidate();
@@ -174,6 +192,8 @@ private:
     std::unique_ptr<remi::Renderer> renderer_;
     std::unique_ptr<remi::ResourceManager> resources_;
     std::unique_ptr<remi::ResourceCache<remi::Mesh>> meshes_;
+    std::unique_ptr<remi::assets::StaticGltfCache> assets_;
+    remi::debug::SceneInspector inspector_;
     remi::MeshHandle cube_;
     std::unique_ptr<remi::Scene> scene_;
     std::unique_ptr<remi::PhysicsWorld> physics_;
@@ -194,9 +214,11 @@ int wmain(int argc, wchar_t** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::wstring_view arg(argv[i]);
         if (arg == L"--smoke") application.smoke = true;
+        else if (arg == L"--inspector") application.inspect = true;
+        else if (arg == L"--static-gltf" && i+1 < argc) application.staticGltf = argv[++i];
         else if (arg == L"--warp") application.warp = true;
         else if (arg == L"--capture" && i + 1 < argc) application.capture = argv[++i];
-        else { remi::Log("Usage: REMISandbox [--smoke] [--warp] [--capture path.bmp]"); return 2; }
+        else { remi::Log("Usage: REMISandbox [--smoke] [--warp] [--inspector] [--static-gltf path] [--capture path.bmp]"); return 2; }
     }
     if (application.smoke) { config.window.visible = false; config.pauseWhenInactive = false; config.frameLimit = 12; }
     const int result = remi::RunApplication(application, config);

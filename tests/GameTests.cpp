@@ -1,5 +1,6 @@
 #include <GravityGame.hpp>
 #include <GameProject.hpp>
+#include <GravityLevelBuilder.hpp>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -9,6 +10,20 @@ int main(int argc, char** argv) {
         Check(argc == 2,"Project path required");
         using namespace remi::game;
         const auto project = GameProject::Load(argv[1]);
+        GravityRules isolatedRules;
+        const auto ruleConfig = GravityRuleConfig{project.level.coinPositions,project.level.goalPosition,
+            project.level.goalHalfExtent,project.level.deathMin,project.level.deathMax};
+        isolatedRules.Reset(ruleConfig);
+        const auto firstCoin = isolatedRules.Tick(project.level.coinPositions[0],false,true,1.f/60);
+        Check(firstCoin.collected[0] && isolatedRules.Coins() == 1 &&
+              isolatedRules.Status() == State::Playing,"Coin rule depends on a live physics world");
+        (void)isolatedRules.Tick(project.level.goalPosition,true,false,1.f/60);
+        Check(isolatedRules.Status() == State::Playing,"Goal opened before all coins were collected");
+        (void)isolatedRules.Tick({project.level.deathMax.x+1,0,0},false,false,1.f/60);
+        Check(isolatedRules.Status() == State::Lost,"Out-of-bounds rule failed without physics");
+        isolatedRules.Reset(ruleConfig);
+        Check(isolatedRules.Status() == State::Playing && isolatedRules.Coins() == 0 &&
+              isolatedRules.Elapsed() == 0,"Rules did not reset independently");
         Check(project.shader.filename() == "Basic.hlsl" && project.font.filename() == "Pretendard-SemiBold.otf" &&
               std::abs(project.level.gravity-9.81f) < .001f && project.level.coinPositions.size() == 3,
               "Project assets or level were not parsed");
@@ -82,6 +97,17 @@ int main(int argc, char** argv) {
         Check(forward().z > .6f,"Player visual faced backward while inverted and moving forward");
         animated.Tick({-1,0},1.f/60);
         Check(forward().x < -.6f,"Player visual faced backward while inverted and moving left");
+        GravityGame alternate({},{},{},false,{},{},MakeAlternateGravityLevel(project.level));
+        Check(alternate.World().Size() == 18 && alternate.Supported(),"Alternate course did not reuse level builder");
+        alternate.Tick({0,0,true},1.f/60);
+        for (unsigned i = 0; i < 70; ++i) alternate.Tick({},1.f/60);
+        Check(alternate.Supported() && std::abs(alternate.Position().y-4.6f) < .001f,
+              "Alternate course ceiling was not raised");
+        for (unsigned i = 0; i < 180; ++i) alternate.Tick({1,0},1.f/60);
+        Check(alternate.Coins() == alternate.TotalCoins(),"Alternate course coins were not reachable");
+        alternate.Tick({0,0,true},1.f/60);
+        for (unsigned i = 0; i < 70; ++i) alternate.Tick({},1.f/60);
+        Check(alternate.Status() == State::Won,"Alternate course did not finish with shared game rules");
         std::cout << "Gap loss, ceiling traversal, two flips, goal win, terminal freeze, diagonal speed, 1000 restarts passed\n";
         return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

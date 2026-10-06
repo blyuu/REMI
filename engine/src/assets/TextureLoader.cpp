@@ -3,6 +3,7 @@
 #include <climits>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 
 namespace remi::assets {
@@ -18,9 +19,9 @@ ImageRGBA DecodeImage(std::span<const std::uint8_t> encoded) {
         stbi_image_free(decoded);
         throw std::runtime_error("Image decode failed");
     }
+    const std::unique_ptr<unsigned char, decltype(&stbi_image_free)> pixels(decoded,stbi_image_free);
     ImageRGBA image{static_cast<unsigned>(width), static_cast<unsigned>(height), {}};
     image.pixels.assign(decoded, decoded + static_cast<std::size_t>(width) * height * 4);
-    stbi_image_free(decoded);
     return image;
 }
 ImageRGBA LoadImage(const std::filesystem::path& file) {

@@ -1,5 +1,5 @@
 #pragma once
-#include "GravityGame.hpp"
+#include "GravityLevel.hpp"
 #include <filesystem>
 
 namespace remi::game {

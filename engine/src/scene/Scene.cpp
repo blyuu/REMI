@@ -1,5 +1,6 @@
 #include <remi/scene/Scene.hpp>
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 
 namespace remi {
@@ -36,24 +37,35 @@ EntityId Scene::Create(std::string name) {
 }
 void Scene::Retire(std::uint32_t index) noexcept {
     auto& slot = slots_[index];
-    slot.alive = false; slot.name.clear(); slot.parent = {}; slot.transform.reset(); slot.mesh.reset(); --count_;
+    slot.alive = false; slot.name.clear(); slot.parent = {}; slot.transform.reset(); slot.mesh.reset();
+    slot.firstChild = slot.nextSibling = slot.prevSibling = std::numeric_limits<std::uint32_t>::max();
+    --count_;
     // Exhausted generations permanently retire the index rather than wrap.
     if (slot.generation != std::numeric_limits<std::uint32_t>::max()) {
         ++slot.generation; slot.nextFree = freeHead_; freeHead_ = index;
     }
 }
+void Scene::UnlinkChild(std::uint32_t index) noexcept {
+    auto& slot = slots_[index];
+    if (slot.parent == EntityId{}) return;
+    if (slot.prevSibling != std::numeric_limits<std::uint32_t>::max())
+        slots_[slot.prevSibling].nextSibling = slot.nextSibling;
+    else
+        slots_[slot.parent.index].firstChild = slot.nextSibling;
+    if (slot.nextSibling != std::numeric_limits<std::uint32_t>::max())
+        slots_[slot.nextSibling].prevSibling = slot.prevSibling;
+    slot.parent = {};
+    slot.nextSibling = slot.prevSibling = std::numeric_limits<std::uint32_t>::max();
+}
 bool Scene::Destroy(EntityId id) noexcept {
     if (!Alive(id)) return false;
-    // Stackless post-order traversal: delete leaves, then return through parent IDs.
-    // O(n^2) for a large tree; deliberately no allocation/recursion in destruction.
+    // Linked children allow stackless post-order deletion in O(subtree size).
     auto current = id;
     for (;;) {
-        EntityId child;
-        for (std::uint32_t index = 0; index < slots_.size(); ++index) {
-            if (slots_[index].alive && slots_[index].parent == current) { child = Id(index); break; }
-        }
-        if (child != EntityId{}) { current = child; continue; }
+        const auto child = slots_[current.index].firstChild;
+        if (child != std::numeric_limits<std::uint32_t>::max()) { current = Id(child); continue; }
         const auto parent = slots_[current.index].parent;
+        UnlinkChild(current.index);
         Retire(current.index);
         if (current == id) break;
         current = parent;
@@ -90,7 +102,9 @@ std::vector<EntityId> Scene::Entities() const {
 }
 std::vector<EntityId> Scene::Children(EntityId parent) const {
     Require(parent); std::vector<EntityId> result;
-    for (auto id : Entities()) if (slots_[id.index].parent == parent) result.push_back(id);
+    for (auto index = slots_[parent.index].firstChild; index != std::numeric_limits<std::uint32_t>::max();
+         index = slots_[index].nextSibling) result.push_back(Id(index));
+    std::sort(result.begin(),result.end(),[](EntityId a,EntityId b) { return a.index < b.index; });
     return result;
 }
 std::string_view Scene::Name(EntityId id) const { Require(id); return slots_[id.index].name; }
@@ -100,7 +114,17 @@ bool Scene::SetParent(EntityId child, EntityId parent) {
     if (!Alive(child) || (parent != EntityId{} && !Alive(parent))) return false;
     for (auto ancestor = parent; ancestor != EntityId{}; ancestor = slots_[ancestor.index].parent)
         if (ancestor == child) return false;
-    slots_[child.index].parent = parent; return true;
+    UnlinkChild(child.index);
+    if (parent != EntityId{}) {
+        auto& childSlot = slots_[child.index];
+        auto& parentSlot = slots_[parent.index];
+        childSlot.parent = parent;
+        childSlot.nextSibling = parentSlot.firstChild;
+        if (childSlot.nextSibling != std::numeric_limits<std::uint32_t>::max())
+            slots_[childSlot.nextSibling].prevSibling = child.index;
+        parentSlot.firstChild = child.index;
+    }
+    return true;
 }
 Matrix4 Scene::WorldMatrix(EntityId id) const {
     Require(id); auto result = Matrix4::Identity();

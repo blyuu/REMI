@@ -56,6 +56,18 @@ int main() {
         Check(scene.Destroy(root) && !scene.Alive(child) && !scene.Alive(grandchild), "Subtree deletion left children");
         Check(scene.Size() == 0, "Subtree size wrong");
 
+        const auto a = scene.Create("a"), b = scene.Create("b");
+        const auto a1 = scene.Create("a1"), a2 = scene.Create("a2"), a3 = scene.Create("a3");
+        Check(scene.SetParent(a1,a) && scene.SetParent(a2,a) && scene.SetParent(a3,a), "Sibling setup failed");
+        Check(scene.Children(a).size() == 3, "Sibling links missing");
+        Check(scene.Destroy(a2) && scene.Children(a).size() == 2, "Middle sibling unlink failed");
+        Check(scene.SetParent(a1,b) && scene.Children(a).size() == 1 &&
+              scene.Children(b).size() == 1 && scene.Parent(a1) == b, "Reparent links failed");
+        Check(scene.SetParent(a3,{}) && scene.Children(a).empty() &&
+              scene.Parent(a3) == remi::EntityId{}, "Detach links failed");
+        Check(scene.Destroy(a) && scene.Alive(a1) && scene.Alive(a3), "Subtree deletion crossed parent boundary");
+        Check(scene.Destroy(b) && !scene.Alive(a1) && scene.Destroy(a3), "Reparented subtree deletion failed");
+
         auto ancestor = scene.Create(); const auto top = ancestor;
         for (int i = 0; i < 256; ++i) {
             const auto id = scene.Create(); scene.Get<remi::TransformComponent>(id)->position.x = 1;

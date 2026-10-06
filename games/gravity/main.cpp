@@ -1,10 +1,12 @@
 #include "GravityGame.hpp"
 #include "GameHud.hpp"
 #include "GameProject.hpp"
+#include "GravityLevelBuilder.hpp"
 #include <remi/debug/DebugOverlay.hpp>
 #include <remi/core/Profiler.hpp>
 #include <remi/runtime/Application.hpp>
-#include <remi/render/SceneRenderer.hpp>
+#include <remi/render/SceneRenderSession.hpp>
+#include <remi/render/PrimitiveMesh.hpp>
 #include <remi/render/BakedAnimation.hpp>
 #include <remi/assets/GltfAsset.hpp>
 #include <remi/resources/ResourceManager.hpp>
@@ -19,12 +21,6 @@
 #include <fstream>
 #include <iomanip>
 
-std::unique_ptr<remi::Mesh> Box(remi::Renderer& renderer,remi::Vec3 color) {
-    std::array<remi::Vertex,8> vertices{};
-    for (unsigned i = 0; i < 8; ++i) vertices[i] = {{(i&1) ? .5f:-.5f,(i&2) ? .5f:-.5f,(i&4) ? .5f:-.5f},color};
-    const std::array<std::uint32_t,36> indices{0,2,1,1,2,3,5,7,4,4,7,6,4,6,0,0,6,2,1,3,5,5,3,7,2,6,3,3,6,7,4,0,5,5,0,1};
-    return renderer.CreateMesh(vertices,indices);
-}
 std::unique_ptr<remi::Mesh> Coin(remi::Renderer& renderer) {
     constexpr unsigned sides = 24;
     constexpr float pi = 3.14159265f;
@@ -58,6 +54,7 @@ public:
     std::filesystem::path demoDirectory;
     std::filesystem::path characterFile;
     std::filesystem::path projectFile;
+    unsigned levelIndex = 1;
     std::string idleClip = "idle", moveClip = "run";
     bool idleClipExplicit = false, moveClipExplicit = false;
     void OnAttach(remi::Window& window) override {
@@ -69,15 +66,16 @@ public:
         config.shaderFile = project.shader;
         config.useWarp = warp; config.vsync = !smoke && demoDirectory.empty();
         if (!demoDirectory.empty()) std::filesystem::create_directories(demoDirectory);
-        auto renderer = std::make_unique<remi::Renderer>(config);
-        auto meshes = std::make_unique<remi::ResourceCache<remi::Mesh>>();
-        auto platform = meshes->Load("platform",[&] { return Box(*renderer,{.22f,.30f,.42f}); });
+        auto session = std::make_unique<remi::SceneRenderSession>(config);
+        auto& renderer = session->Device();
+        auto& meshes = session->Meshes();
+        auto platform = meshes.Load("platform",[&] { return remi::CreateBoxMesh(renderer,{.22f,.30f,.42f}); });
         const auto selectedCharacter = characterFile.empty() ? project.character : characterFile;
         if (!characterFile.empty() && !std::filesystem::exists(selectedCharacter)) throw std::runtime_error("Character asset not found: " + selectedCharacter.string());
         auto extension = selectedCharacter.extension().wstring();
         std::transform(extension.begin(), extension.end(), extension.begin(), [](wchar_t c) { return std::towlower(c); });
         const bool gltfCharacter = extension == L".glb" || extension == L".gltf";
-        auto gltfAsset = gltfCharacter ? remi::assets::GltfAsset::Load(*renderer, selectedCharacter) : nullptr;
+        auto gltfAsset = gltfCharacter ? remi::assets::GltfAsset::Load(renderer, selectedCharacter) : nullptr;
         auto animation = !gltfCharacter && std::filesystem::exists(selectedCharacter) ? remi::BakedAnimation::Load(selectedCharacter) : nullptr;
         if (animation && (!animation->HasClip(idleClip) || !animation->HasClip(moveClip)))
             throw std::runtime_error("Character asset must contain selected idle and move clips");
@@ -107,11 +105,12 @@ public:
             else if (idleClipExplicit || moveClipExplicit) throw std::runtime_error("glTF has no animation clips");
         }
         remi::MeshHandle player{};
-        if (!gltfAsset) player = meshes->Load("player",[&] { return animation ? animation->CreateMesh(*renderer) : Box(*renderer,{1,.42f,.07f}); });
-        auto goal = meshes->Load("goal",[&] { return Box(*renderer,{.05f,1,.25f}); });
-        auto coin = meshes->Load("coin",[&] { return Coin(*renderer); });
-        auto accent = meshes->Load("accent",[&] { return Box(*renderer,{.03f,.67f,.76f}); });
-        auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr || gltfAsset != nullptr,coin,accent,project.level);
+        if (!gltfAsset) player = meshes.Load("player",[&] { return animation ? animation->CreateMesh(renderer) : remi::CreateBoxMesh(renderer,{1,.42f,.07f}); });
+        auto goal = meshes.Load("goal",[&] { return remi::CreateBoxMesh(renderer,{.05f,1,.25f}); });
+        auto coin = meshes.Load("coin",[&] { return Coin(renderer); });
+        auto accent = meshes.Load("accent",[&] { return remi::CreateBoxMesh(renderer,{.03f,.67f,.76f}); });
+        const auto level = levelIndex == 2 ? remi::game::MakeAlternateGravityLevel(project.level) : project.level;
+        auto game = std::make_unique<remi::game::GravityGame>(platform,player,goal,animation != nullptr || gltfAsset != nullptr,coin,accent,level);
         remi::Log(gltfAsset ? "glTF character loaded: " + selectedCharacter.string() :
             animation ? "Character asset loaded: " + selectedCharacter.string() + " (" + idleClip + ", " + moveClip + ")" :
             "No character asset: using box player");
@@ -130,7 +129,7 @@ public:
                 if (!previewFinish) game->Restart();
             }
         }
-        renderer_ = std::move(renderer); meshes_ = std::move(meshes); game_ = std::move(game);
+        render_ = std::move(session); renderer_ = &render_->Device(); meshes_ = &render_->Meshes(); game_ = std::move(game);
         animation_ = std::move(animation); playerHandle_ = player;
         gltfAsset_ = std::move(gltfAsset);
         hud_ = std::make_unique<GameHud>(project.font);
@@ -185,7 +184,6 @@ public:
         const auto vp = camera_.ViewProjection(float(renderer_->Width())/float(renderer_->Height()));
         remi::DirectionalLight light; light.ambient = .38f; light.cameraPosition = camera_.Position();
         const auto lightVP = remi::DirectionalShadowMatrix({0,2,0},light.direction,24);
-        const auto resolve = [&](remi::MeshHandle handle) { return meshes_->Get(handle); };
         if (animation_) animation_->Update(*renderer_,*meshes_->GetMutable(playerHandle_),running_ ? moveClip : idleClip,elapsed);
         if (gltfAsset_) {
             switch (game_->PlayerMaterial()) {
@@ -205,16 +203,15 @@ public:
         }
         renderer_->BeginGpuProfile();
         const auto shadowStart = remi::CpuProfiler::Clock::now();
-        renderer_->BeginShadow(lightVP);
-        const auto shadowStats = remi::DrawScene(*renderer_,game_->World(),lightVP,resolve);
-        if (gltfAsset_) gltfAsset_->DrawShadow(*renderer_, game_->PlayerVisualWorld(), lightVP);
-        renderer_->EndShadow();
+        const auto shadowStats = render_->DrawShadow(game_->World(),lightVP,[&](remi::Renderer& device) {
+            if (gltfAsset_) gltfAsset_->DrawShadow(device,game_->PlayerVisualWorld(),lightVP);
+        });
         profiler_.Add(remi::CpuStage::Shadow,shadowStart);
         const auto colorStart = remi::CpuProfiler::Clock::now();
-        const auto stats = remi::DrawScene(*renderer_,game_->World(),vp,resolve,&light);
-        if (gltfAsset_) gltfAsset_->Draw(*renderer_, game_->PlayerVisualWorld(), vp, light);
+        const auto stats = render_->DrawColor(game_->World(),vp,light,[&](remi::Renderer& device) {
+            if (gltfAsset_) gltfAsset_->Draw(device,game_->PlayerVisualWorld(),vp,light);
+        });
         profiler_.Add(remi::CpuStage::Color,colorStart);
-        if (stats.missing) throw std::runtime_error("Game render validation failed");
         hud_->Update(*renderer_,renderer_->Width(),renderer_->Height(),*game_);
         hud_->Draw(*renderer_);
         overlayAge_ += elapsed;
@@ -237,7 +234,7 @@ public:
             }
             overlay_.Draw(*renderer_);
         }
-        if (renderer_->CheckDiagnostics()) throw std::runtime_error("Game render validation failed");
+        render_->RequireCleanDiagnostics();
         renderer_->EndGpuProfile();
         if (!capture.empty() && frame_ == 4) renderer_->SaveScreenshot(capture);
         if (!demoDirectory.empty() && demoTick_ >= nextDemoCaptureTick_) {
@@ -268,17 +265,18 @@ public:
         window.SetTitle(title.str());
     }
     void OnDetach() noexcept override {
-        overlay_.Clear(); hud_.reset(); game_.reset(); animation_.reset(); gltfAsset_.reset(); meshes_.reset();
-        try { if (renderer_) { const auto audit = renderer_->ShutdownAndValidate(); failed = audit.liveChildren != 0 || audit.priorWarnings != 0;
+        overlay_.Clear(); hud_.reset(); game_.reset(); animation_.reset(); gltfAsset_.reset();
+        try { if (render_) { const auto audit = render_->ShutdownAndValidate(); failed = audit.liveChildren != 0 || audit.priorWarnings != 0;
             remi::Log("Game GPU shutdown: live children="+std::to_string(audit.liveChildren)+", warnings="+std::to_string(audit.priorWarnings)); } }
         catch (const std::exception& e) { failed = true; remi::Log(e.what()); }
-        renderer_.reset();
+        render_.reset(); renderer_ = nullptr; meshes_ = nullptr;
         if (csv_.is_open()) { csv_.flush(); if (!csv_) failed = true; csv_.close(); }
         if (!demoDirectory.empty()) remi::Log("Gameplay demo frames captured: " + std::to_string(demoFrames_));
     }
 private:
-    std::unique_ptr<remi::Renderer> renderer_;
-    std::unique_ptr<remi::ResourceCache<remi::Mesh>> meshes_;
+    std::unique_ptr<remi::SceneRenderSession> render_;
+    remi::Renderer* renderer_ = nullptr; // Non-owning aliases, valid while render_ is alive.
+    remi::ResourceCache<remi::Mesh>* meshes_ = nullptr;
     std::unique_ptr<remi::game::GravityGame> game_;
     std::unique_ptr<remi::BakedAnimation> animation_;
     std::unique_ptr<remi::assets::GltfAsset> gltfAsset_;
@@ -319,6 +317,11 @@ int wmain(int argc,wchar_t** argv) {
         else if (arg == L"--record-demo" && i+1 < argc) app.demoDirectory = argv[++i];
         else if (arg == L"--character" && i+1 < argc) app.characterFile = argv[++i];
         else if (arg == L"--project" && i+1 < argc) app.projectFile = argv[++i];
+        else if (arg == L"--level" && i+1 < argc) {
+            const std::wstring_view value(argv[++i]);
+            if (value != L"1" && value != L"2") return 2;
+            app.levelIndex = value == L"2" ? 2u : 1u;
+        }
         else if (arg == L"--idle-clip" && i+1 < argc) { app.idleClip = clipName(argv[++i]); app.idleClipExplicit = true; if (app.idleClip.empty()) return 2; }
         else if (arg == L"--move-clip" && i+1 < argc) { app.moveClip = clipName(argv[++i]); app.moveClipExplicit = true; if (app.moveClip.empty()) return 2; }
         else if (arg == L"--profile-frames" && i+1 < argc) {

@@ -21,7 +21,7 @@ add_library(REMI::Resources ALIAS remi_resources)
 target_link_libraries(remi_resources PUBLIC REMI::Core PRIVATE remi_build_options)
 set_target_properties(remi_resources PROPERTIES FOLDER "Engine")
 add_library(REMI::Scene ALIAS remi_scene)
-add_library(remi_physics STATIC src/physics/PhysicsWorld.cpp)
+add_library(remi_physics STATIC src/physics/PhysicsWorld.cpp src/physics/GravityControl.cpp src/physics/SceneBuilder.cpp)
 add_library(REMI::Physics ALIAS remi_physics)
 target_link_libraries(remi_physics PUBLIC REMI::Scene PRIVATE remi_build_options)
 set_target_properties(remi_physics PROPERTIES FOLDER "Engine")
@@ -33,12 +33,12 @@ add_library(REMI::RHI ALIAS remi_rhi)
 target_link_libraries(remi_rhi PUBLIC REMI::Core PRIVATE remi_build_options d3d11 dxgi d3dcompiler)
 set_target_properties(remi_rhi PROPERTIES FOLDER "Engine")
 
-add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp src/render/SceneRenderer.cpp src/render/BakedAnimation.cpp src/render/ShaderCache.cpp)
+add_library(remi_renderer STATIC src/render/Renderer.cpp src/render/Camera.cpp src/render/SceneRenderer.cpp src/render/SceneRenderSession.cpp src/render/PrimitiveMesh.cpp src/render/BakedAnimation.cpp src/render/ShaderCache.cpp)
 add_library(REMI::Renderer ALIAS remi_renderer)
-target_link_libraries(remi_renderer PUBLIC REMI::Core REMI::Scene PRIVATE REMI::RHI remi_build_options d3d11 dxgi d3dcompiler dxguid)
+target_link_libraries(remi_renderer PUBLIC REMI::Core REMI::Scene REMI::Resources PRIVATE REMI::RHI remi_build_options d3d11 dxgi d3dcompiler dxguid)
 set_target_properties(remi_renderer PROPERTIES FOLDER "Engine")
 add_library(remi_assets STATIC src/assets/GltfLoader.cpp src/assets/CgltfImpl.cpp
-    src/assets/GltfAsset.cpp src/assets/TextureLoader.cpp src/assets/StbImpl.cpp src/assets/MaterialAsset.cpp
+    src/assets/GltfAsset.cpp src/assets/StaticGltfCache.cpp src/assets/TextureLoader.cpp src/assets/StbImpl.cpp src/assets/MaterialAsset.cpp
     src/animation/Animator.cpp src/animation/AnimStateMachine.cpp)
 add_library(REMI::Assets ALIAS remi_assets)
 target_include_directories(remi_assets PRIVATE "${PROJECT_SOURCE_DIR}/third_party/cgltf"
@@ -47,7 +47,7 @@ target_link_libraries(remi_assets PUBLIC REMI::Renderer PRIVATE remi_build_optio
 set_source_files_properties(src/assets/CgltfImpl.cpp PROPERTIES COMPILE_OPTIONS /w)
 set_source_files_properties(src/assets/StbImpl.cpp PROPERTIES COMPILE_OPTIONS /w)
 set_target_properties(remi_assets PROPERTIES FOLDER "Engine")
-add_library(remi_debugui STATIC src/debug/DebugOverlay.cpp)
+add_library(remi_debugui STATIC src/debug/DebugOverlay.cpp src/debug/SceneInspector.cpp)
 add_library(REMI::DebugUI ALIAS remi_debugui)
 target_link_libraries(remi_debugui PUBLIC REMI::Renderer PRIVATE remi_build_options)
 set_target_properties(remi_debugui PROPERTIES FOLDER "Engine")

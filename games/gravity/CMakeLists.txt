@@ -1,4 +1,4 @@
-add_library(remi_gravity STATIC GravityGame.cpp GameProject.cpp)
+add_library(remi_gravity STATIC GravityGame.cpp GravityRules.cpp GravityLevelBuilder.cpp GameProject.cpp)
 target_include_directories(remi_gravity PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(remi_gravity PRIVATE "${PROJECT_SOURCE_DIR}/third_party/json")
 target_link_libraries(remi_gravity PUBLIC REMI::Physics PRIVATE remi_build_options)

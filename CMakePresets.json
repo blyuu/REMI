@@ -11,6 +11,12 @@
       "cacheVariables": { "BUILD_TESTING": "ON" }
     },
     {
+      "name": "portable",
+      "inherits": "vs2022-x64",
+      "binaryDir": "${sourceDir}/build/portable",
+      "cacheVariables": { "REMI_STATIC_RUNTIME": "ON", "REMI_ENABLE_ASAN": "OFF" }
+    },
+    {
       "name": "vs2022-x64-asan",
       "inherits": "vs2022-x64",
       "binaryDir": "${sourceDir}/build/vs2022-x64-asan",
@@ -18,11 +24,13 @@
     }
   ],
   "buildPresets": [
+    { "name": "portable", "configurePreset": "portable", "configuration": "Release" },
     { "name": "debug", "configurePreset": "vs2022-x64", "configuration": "Debug" },
     { "name": "release", "configurePreset": "vs2022-x64", "configuration": "Release" },
     { "name": "asan", "configurePreset": "vs2022-x64-asan", "configuration": "Debug", "targets": ["CoreTests", "SceneTests", "MemoryTests", "ResourceTests", "PhysicsTests", "GameTests"] }
   ],
   "testPresets": [
+    { "name": "portable", "configurePreset": "portable", "configuration": "Release", "output": { "outputOnFailure": true } },
     { "name": "debug", "configurePreset": "vs2022-x64", "configuration": "Debug", "output": { "outputOnFailure": true } },
     { "name": "release", "configurePreset": "vs2022-x64", "configuration": "Release", "output": { "outputOnFailure": true } },
     { "name": "asan", "configurePreset": "vs2022-x64-asan", "configuration": "Debug", "filter": { "include": { "name": "^(Phase1.Core|Phase3.Scene|Phase4.Memory|Phase5.Resources|Phase7.Physics|Phase8.Game)$" } }, "output": { "outputOnFailure": true } }

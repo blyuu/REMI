@@ -1,21 +1,8 @@
 #pragma once
-#include <remi/physics/PhysicsWorld.hpp>
+#include "GravityLevel.hpp"
+#include "GravityRules.hpp"
 #include <memory>
-#include <array>
 namespace remi::game {
-struct LevelBox { Vec3 position; Vec3 halfExtent; };
-struct GravityLevel {
-    float gravity = 9.81f;
-    float moveSpeed = 4.f;
-    PhysicsSettings physics{};
-    Vec3 playerSpawn{-6,.4f,0};
-    std::array<LevelBox,3> platforms{{{{-5,-.25f,0},{3,.25f,2}}, {{5,-.25f,0},{3,.25f,2}}, {{0,4.25f,0},{8,.25f,2}}}};
-    Vec3 goalPosition{6,.06f,0};
-    Vec3 goalHalfExtent{.8f,.06f,.8f};
-    std::array<Vec3,3> coinPositions{{{-3.5f,3.35f,0},{0,3.35f,0},{3.5f,3.35f,0}}};
-    Vec3 deathMin{-10,-5,-5}, deathMax{10,10,5};
-};
-enum class State { Playing, Won, Lost };
 enum class MaterialPreset { Silver, Original, Gold, Midnight };
 struct Controls { float x = 0, z = 0; bool flip = false, restart = false; };
 class GravityGame {
@@ -28,13 +15,13 @@ public:
     [[nodiscard]] PhysicsStats Physics() const noexcept { return physics_->Stats(); }
     [[nodiscard]] Vec3 Position() const { return scene_->Get<TransformComponent>(player_)->position; }
     [[nodiscard]] Matrix4 PlayerVisualWorld() const { return scene_->WorldMatrix(separatePlayerVisual_ ? playerVisual_ : player_); }
-    [[nodiscard]] State Status() const noexcept { return state_; }
+    [[nodiscard]] State Status() const noexcept { return rules_.Status(); }
     [[nodiscard]] bool Supported() const noexcept { return physics_->Supported(player_); }
     [[nodiscard]] bool Inverted() const noexcept { return inverted_; }
-    [[nodiscard]] float Elapsed() const noexcept { return elapsed_; }
-    [[nodiscard]] unsigned Flips() const noexcept { return flips_; }
-    [[nodiscard]] unsigned Coins() const noexcept { return coinsCollected_; }
-    [[nodiscard]] static constexpr unsigned TotalCoins() noexcept { return 3; }
+    [[nodiscard]] float Elapsed() const noexcept { return rules_.Elapsed(); }
+    [[nodiscard]] unsigned Flips() const noexcept { return rules_.Flips(); }
+    [[nodiscard]] unsigned Coins() const noexcept { return rules_.Coins(); }
+    [[nodiscard]] static constexpr unsigned TotalCoins() noexcept { return GravityRules::TotalCoins(); }
     [[nodiscard]] MaterialPreset PlayerMaterial() const noexcept { return playerMaterial_; }
     void CyclePlayerMaterial();
 private:
@@ -46,13 +33,9 @@ private:
     EntityId player_;
     EntityId playerVisual_;
     std::array<EntityId,3> coins_{};
-    std::array<bool,3> coinCollectedFlags_{};
-    State state_ = State::Playing;
+    GravityRules rules_;
     bool inverted_ = false;
     float facingYaw_ = 0;
-    float elapsed_ = 0;
-    unsigned flips_ = 0;
-    unsigned coinsCollected_ = 0;
     MaterialPreset playerMaterial_ = MaterialPreset::Silver;
     GravityLevel level_;
 };

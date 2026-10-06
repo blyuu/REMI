@@ -46,6 +46,20 @@ int main() {
             Check(Tracked::alive == 1, "Destructor fixture missing");
         }
         Check(Tracked::alive == 0, "Cache destructor leaked");
+        {
+            remi::ResourceCache<std::string> cache;
+            const auto shared = cache.Load("mesh",[] { return std::make_unique<std::string>("old"); });
+            Check(cache.Load("mesh",[] { return std::make_unique<std::string>("duplicate"); }) == shared &&
+                  cache.Size() == 1, "Shared cache key duplicated an asset");
+            bool failedReload = false;
+            try { (void)cache.Reload("mesh",[]() -> std::unique_ptr<std::string> {
+                throw std::runtime_error("Expected reload failure");
+            }); } catch (const std::runtime_error&) { failedReload = true; }
+            Check(failedReload && *cache.Get(shared) == "old", "Failed reload lost the live asset");
+            Check(cache.Reload("mesh",[] { return std::make_unique<std::string>("new"); }) == shared &&
+                  *cache.Get(shared) == "new" && cache.Reloads() == 1, "Reload invalidated a scene handle");
+            Check(cache.Unload(shared) && !cache.Get(shared), "Unload retained a shared asset");
+        }
         Fixture fixture;
         remi::ResourceManager files(fixture.root,16);
         bool failed = false;
@@ -57,6 +71,8 @@ int main() {
         Check(files.Get(file)->bytes.size() == 7 && files.Get(file)->bytes[3] == '\0', "Binary content corrupted");
         fixture.Write("updated");
         Check(files.Get(file)->bytes[0] == 'a', "Cached data changed implicitly");
+        const auto reloaded = files.ReloadFile("asset.bin");
+        Check(reloaded == file && files.Get(file)->bytes[0] == 'u', "File reload did not preserve handle");
         Check(files.Unload(file), "File unload failed");
         const auto updated = files.LoadFile("asset.bin");
         Check(updated != file && !files.Get(file) && files.Get(updated)->bytes[0] == 'u', "Explicit reload failed");

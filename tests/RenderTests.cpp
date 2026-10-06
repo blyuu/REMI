@@ -1,5 +1,7 @@
 #include <remi/render/Renderer.hpp>
 #include <remi/render/SceneRenderer.hpp>
+#include <remi/render/SceneRenderSession.hpp>
+#include <remi/render/PrimitiveMesh.hpp>
 #include <remi/platform/Window.hpp>
 #include <array>
 #include <cmath>
@@ -35,6 +37,19 @@ int wmain(int argc, wchar_t** argv) {
         remi::RendererConfig config; config.nativeWindow = window.NativeHandle(); config.width = 128; config.height = 96;
         config.shaderFile = argv[1]; config.useWarp = true; config.vsync = false;
         remi::Renderer renderer(config);
+        {
+            auto source = Quad(renderer,.2f,{1,1,1});
+            auto sharedTextureMesh = Quad(renderer,.2f,{1,1,1});
+            const std::array<std::uint8_t,4> red{255,0,0,255};
+            renderer.SetMeshTexture(*source,1,1,red);
+            renderer.ShareMeshTexture(*sharedTextureMesh,*source);
+            source.reset();
+            renderer.BeginFrame(); renderer.Draw(*sharedTextureMesh,remi::Matrix4::Identity());
+            const auto image = renderer.Readback(); renderer.Present();
+            const auto center = ((image.height/2)*image.width+image.width/2)*4;
+            Check(image.rgba[center] > 250 && image.rgba[center+1] < 5,
+                "Shared texture was lost when its original mesh was destroyed");
+        }
         auto nearQuad = Quad(renderer, .2f, {1,0,0}); auto farQuad = Quad(renderer, .8f, {0,1,0});
         for (unsigned pass = 0; pass < 6; ++pass) {
             if (pass == 2) renderer.Resize(97,61);
@@ -129,6 +144,44 @@ int wmain(int argc, wchar_t** argv) {
             const auto report = hot.ShutdownAndValidate();
             Check(report.liveChildren == 0 && report.priorWarnings == 0,"Shader reload leaked D3D objects");
             std::filesystem::remove(temp);
+        }
+        {
+            remi::Window another(wc);
+            auto sessionConfig = config; sessionConfig.nativeWindow = another.NativeHandle();
+            remi::SceneRenderSession session(sessionConfig);
+            const auto handle = session.Meshes().Load("session-box",[&] {
+                return remi::CreateBoxMesh(session.Device(),{.4f,.8f,1.f});
+            });
+            const auto shared = session.Meshes().Load("session-box",[&]() -> std::unique_ptr<remi::Mesh> {
+                throw std::runtime_error("Duplicate GPU mesh allocation");
+            });
+            Check(shared == handle && session.Meshes().Size() == 1, "Shared scene mesh duplicated GPU storage");
+            remi::Scene scene;
+            const auto id = scene.Create("session-scene-box");
+            scene.Add<remi::MeshComponent>(id,{handle,true});
+            const auto second = scene.Create("same-mesh-second-entity");
+            scene.Add<remi::MeshComponent>(second,{shared,true});
+            bool shadowExtra = false, colorExtra = false;
+            remi::DirectionalLight light; light.cameraPosition = camera.Position();
+            const auto lightMatrix = remi::DirectionalShadowMatrix({0,0,0},light.direction);
+            const auto shadow = session.DrawShadow(scene,lightMatrix,[&](remi::Renderer&) { shadowExtra = true; });
+            const auto color = session.DrawColor(scene,vp,light,[&](remi::Renderer&) { colorExtra = true; });
+            Check(shadow.draws == 2 && color.draws == 2 && shadowExtra && colorExtra,
+                "Shared render session skipped a pass or game-specific draw hook");
+            session.RequireCleanDiagnostics();
+            session.Device().Present();
+            scene.Clear();
+            Check(session.Meshes().Size() == 1, "Scene unload unexpectedly destroyed shared mesh");
+            Check(session.Meshes().Reload("session-box",[&] {
+                return remi::CreateBoxMesh(session.Device(),{.5f,.5f,.5f});
+            }) == handle && session.Meshes().Size() == 1, "Mesh reload changed stable handle");
+            Check(session.Meshes().Unload(handle) && !session.Meshes().Get(handle), "Explicit mesh unload failed");
+            const auto report = session.ShutdownAndValidate();
+            Check(report.liveChildren == 0 && report.priorWarnings == 0,
+                "Shared render session retained mesh or D3D objects");
+            rejected = false;
+            try { (void)session.Device(); } catch (const std::logic_error&) { rejected = true; }
+            Check(rejected,"Shut-down render session exposed a stale Renderer");
         }
         Check(renderer.CheckDiagnostics() == 0, "D3D11 debug warning/error detected");
         std::cout << "GPU readback: depth/order, resize, viewport, sRGB and camera passed. Debug layer: "

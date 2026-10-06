@@ -25,6 +25,7 @@ public:
     [[nodiscard]] AnimStateMachine& States() noexcept { return states_; }
     void SetGlobalTint(Vec3 tint) noexcept { globalTint_ = tint; }
 private:
+    friend class StaticGltfCache;
     friend std::vector<MeshHandle> ImportStaticGltfScene(Renderer&, Scene&, ResourceCache<Mesh>&, const std::filesystem::path&);
     struct Primitive {
         std::unique_ptr<Mesh> mesh;

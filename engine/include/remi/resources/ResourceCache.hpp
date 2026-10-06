@@ -32,6 +32,28 @@ public:
             ++next_; ++loads_; return {id,owner_};
         } catch (...) { ++failures_; throw; }
     }
+    // Replace a cached object without changing its handle. Build first so loader
+    // failure leaves the old object alive. Any raw pointer from Get is invalidated.
+    template<class Loader> Handle Reload(const std::string& key, Loader&& loader) {
+        if (key.empty()) throw std::invalid_argument("Empty resource key");
+        if (loading_) throw std::logic_error("Reentrant resource loading is unsupported");
+        if (!keys_.contains(key) && next_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::overflow_error("Resource IDs exhausted");
+        struct Guard { bool& value; Guard(bool& v) : value(v) { value = true; } ~Guard() { value = false; } } guard(loading_);
+        try {
+            std::unique_ptr<T> object = std::forward<Loader>(loader)();
+            if (!object) throw std::runtime_error("Resource loader returned null");
+            if (const auto found = keys_.find(key); found != keys_.end()) {
+                objects_.at(found->second).swap(object);
+                ++reloads_;
+                return {found->second,owner_};
+            }
+            const auto id = next_;
+            auto inserted = objects_.emplace(id,std::move(object));
+            try { keys_.emplace(key,id); } catch (...) { objects_.erase(inserted.first); throw; }
+            ++next_; ++loads_; return {id,owner_};
+        } catch (...) { ++failures_; throw; }
+    }
     [[nodiscard]] const T* Get(Handle handle) const noexcept {
         if (handle.owner != owner_) return nullptr;
         const auto found = objects_.find(handle.id);
@@ -56,6 +78,7 @@ public:
     [[nodiscard]] std::size_t Size() const noexcept { return objects_.size(); }
     [[nodiscard]] std::size_t Hits() const noexcept { return hits_; }
     [[nodiscard]] std::size_t Loads() const noexcept { return loads_; }
+    [[nodiscard]] std::size_t Reloads() const noexcept { return reloads_; }
     [[nodiscard]] std::size_t Failures() const noexcept { return failures_; }
 private:
     static std::uint64_t NextOwner() {
@@ -67,7 +90,7 @@ private:
     }
     inline static std::atomic<std::uint64_t> owners_{1};
     std::uint64_t owner_, next_ = 1;
-    std::size_t hits_ = 0, loads_ = 0, failures_ = 0;
+    std::size_t hits_ = 0, loads_ = 0, reloads_ = 0, failures_ = 0;
     bool loading_ = false;
     std::map<std::string,std::uint64_t> keys_;
     std::map<std::uint64_t,std::unique_ptr<T>> objects_;

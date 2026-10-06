@@ -37,6 +37,10 @@ desktop.ini
 !/docs/ShaderImplementation.md
 !/docs/MemoryManagement.md
 !/docs/AssetPipeline.md
+!/docs/REMI_Engine_Complete_Guide.md
+!/docs/PerformanceEvidence.md
+!/docs/benchmarks/
+!/docs/benchmarks/**
 /documentation/
 /versions/
 /logs/

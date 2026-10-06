@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <stdexcept>
 
 namespace remi::assets {
@@ -34,6 +35,7 @@ std::unique_ptr<GltfAsset> GltfAsset::Load(Renderer& renderer, const std::filesy
     if (!gltf::Load(Utf8(file), asset->model_)) throw std::runtime_error("Could not import glTF: " + Utf8(file));
     asset->animator_.SetModel(&asset->model_);
     asset->primitives_.reserve(asset->model_.primitives.size());
+    std::map<std::string,const Mesh*> textureSources;
     for (std::size_t i = 0; i < asset->model_.primitives.size(); ++i) {
         const auto& source = asset->model_.primitives[i];
         if (source.vertices.empty() || source.indices.empty()) continue;
@@ -58,19 +60,27 @@ std::unique_ptr<GltfAsset> GltfAsset::Load(Renderer& renderer, const std::filesy
                 primitive.material = override.properties;
                 overrideTexture = std::move(override.baseColorTexture);
             }
+            const auto setTexture = [&](const std::string& key, const auto& decode) {
+                if (const auto found = textureSources.find(key); found != textureSources.end()) {
+                    renderer.ShareMeshTexture(*primitive.mesh,*found->second);
+                } else {
+                    const auto decoded = decode();
+                    if (!decoded.pixels.empty()) {
+                        renderer.SetMeshTexture(*primitive.mesh,decoded.width,decoded.height,decoded.pixels);
+                        textureSources.emplace(key,primitive.mesh.get());
+                    }
+                }
+            };
             if (!overrideTexture.empty()) {
-                const auto decoded = LoadImage(overrideTexture);
-                renderer.SetMeshTexture(*primitive.mesh, decoded.width, decoded.height, decoded.pixels);
+                setTexture(Utf8(std::filesystem::weakly_canonical(overrideTexture)),[&] { return LoadImage(overrideTexture); });
             } else if (const int imageIndex = material.baseColorImage; imageIndex >= 0) {
                 const auto& image = asset->model_.images[static_cast<std::size_t>(imageIndex)];
-                ImageRGBA decoded;
-                if (!image.data.empty()) decoded = DecodeImage(image.data);
+                if (!image.data.empty()) setTexture("embedded:"+std::to_string(imageIndex),[&] { return DecodeImage(image.data); });
                 else if (!image.uri.empty()) {
                     const auto relative = std::filesystem::path(std::u8string(image.uri.begin(), image.uri.end()));
-                    decoded = LoadImage(file.parent_path() / relative);
+                    const auto path = file.parent_path() / relative;
+                    setTexture(Utf8(std::filesystem::weakly_canonical(path)),[&] { return LoadImage(path); });
                 }
-                if (!decoded.pixels.empty())
-                    renderer.SetMeshTexture(*primitive.mesh, decoded.width, decoded.height, decoded.pixels);
             }
         }
         asset->primitives_.push_back(std::move(primitive));

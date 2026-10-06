@@ -88,6 +88,9 @@ private:
         std::uint32_t generation = 1;
         bool alive = false;
         std::uint32_t nextFree = std::numeric_limits<std::uint32_t>::max();
+        std::uint32_t firstChild = std::numeric_limits<std::uint32_t>::max();
+        std::uint32_t nextSibling = std::numeric_limits<std::uint32_t>::max();
+        std::uint32_t prevSibling = std::numeric_limits<std::uint32_t>::max();
         std::string name;
         EntityId parent;
         std::optional<TransformComponent> transform;
@@ -99,6 +102,7 @@ private:
         else static_assert(!std::is_same_v<T, T>, "Unsupported Scene component type");
     }
     void Require(EntityId id) const;
+    void UnlinkChild(std::uint32_t index) noexcept;
     void Retire(std::uint32_t index) noexcept;
     [[nodiscard]] EntityId Id(std::uint32_t index) const noexcept;
     std::uint64_t token_ = 0;

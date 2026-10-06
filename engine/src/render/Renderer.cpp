@@ -52,7 +52,7 @@ static_assert(sizeof(DrawConstants) == 304);
 struct Mesh::Impl {
     LifetimeToken lifetime{OwnedKind::Mesh};
     std::unique_ptr<rhi::IRHIBuffer> vertices, indices;
-    std::unique_ptr<rhi::IRHITexture> baseColorTexture;
+    std::shared_ptr<rhi::IRHITexture> baseColorTexture;
     std::shared_ptr<DeviceOwnership> ownership;
     ID3D11Device* owner = nullptr;
     UINT count = 0, vertexCount = 0;
@@ -235,6 +235,13 @@ void Renderer::SetMeshTexture(Mesh& mesh, unsigned width, unsigned height, std::
     mesh.impl_->baseColorTexture = r.rhiDevice->CreateTexture({width, height,
         srgb ? rhi::TextureFormat::RGBA8Srgb : rhi::TextureFormat::RGBA8, false, rgba.data()});
 }
+void Renderer::ShareMeshTexture(Mesh& target, const Mesh& source) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (target.impl_->owner != r.device.Get() || source.impl_->owner != r.device.Get())
+        throw std::invalid_argument("Cannot share textures across devices");
+    target.impl_->baseColorTexture = source.impl_->baseColorTexture;
+}
 void Renderer::Resize(unsigned width, unsigned height) {
     auto& r = *impl_;
     if (r.closed) throw std::logic_error("Renderer is shut down");
@@ -359,12 +366,13 @@ void Renderer::BeginGpuProfile() {
     r.gpuNext = (r.gpuNext+1) % static_cast<unsigned>(r.gpuQueries.size());
     r.context->Begin(set.disjoint.Get()); r.context->End(set.start.Get());
 }
-void Renderer::EndGpuProfile() {
+std::uint64_t Renderer::EndGpuProfile() {
     auto& r = *impl_;
-    if (r.gpuActive < 0) return; // Begin skipped a busy query slot.
+    if (r.gpuActive < 0) return 0; // Begin skipped a busy query slot.
     auto& set = r.gpuQueries[r.gpuActive];
     r.context->End(set.colorEnd.Get()); r.context->End(set.disjoint.Get());
     set.pending = true; set.sequence = ++r.gpuSequence; r.gpuActive = -1;
+    return set.sequence;
 }
 GpuTimings Renderer::PollGpuProfile() {
     auto& r = *impl_;

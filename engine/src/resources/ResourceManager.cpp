@@ -8,11 +8,17 @@ ResourceManager::ResourceManager(std::filesystem::path root, std::size_t maxFile
         throw std::invalid_argument("Invalid resource root or file size limit");
 }
 FileHandle ResourceManager::LoadFile(const std::filesystem::path& path) {
+    return LoadFileInternal(path,false);
+}
+FileHandle ResourceManager::ReloadFile(const std::filesystem::path& path) {
+    return LoadFileInternal(path,true);
+}
+FileHandle ResourceManager::LoadFileInternal(const std::filesystem::path& path, bool reload) {
     // Root is a base directory, not a security sandbox. Absolute paths are supported.
     const auto resolved = std::filesystem::weakly_canonical(path.is_absolute() ? path : root_ / path);
     const auto utf8 = resolved.generic_u8string();
     const std::string key(reinterpret_cast<const char*>(utf8.data()),utf8.size());
-    return files_.Load(key,[&] {
+    const auto read = [&] {
         if (!std::filesystem::is_regular_file(resolved)) throw std::runtime_error("Resource is not a regular file: " + key);
         const auto size = std::filesystem::file_size(resolved);
         if (size > limit_) throw std::runtime_error("Resource exceeds file size limit: " + key);
@@ -24,6 +30,7 @@ FileHandle ResourceManager::LoadFile(const std::filesystem::path& path) {
         if (input.peek() != std::char_traits<char>::eof()) throw std::runtime_error("Resource changed while reading: " + key);
         if (input.bad()) throw std::runtime_error("Resource read error: " + key);
         return resource;
-    });
+    };
+    return reload ? files_.Reload(key,read) : files_.Load(key,read);
 }
 }

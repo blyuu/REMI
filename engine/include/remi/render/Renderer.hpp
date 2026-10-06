@@ -53,6 +53,8 @@ public:
     [[nodiscard]] std::unique_ptr<Mesh> CreateDynamicMesh(std::span<const Vertex> vertices, std::span<const std::uint32_t> indices);
     void UpdateMeshVertices(Mesh& mesh, std::span<const Vertex> vertices);
     void SetMeshTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba, bool srgb = true);
+    // Shares the immutable texture allocation; either mesh may be destroyed first.
+    void ShareMeshTexture(Mesh& target, const Mesh& source);
     void Resize(unsigned width, unsigned height);
     void BeginFrame(Vec3 clearColor = {.035f, .055f, .085f});
     void Draw(const Mesh& mesh, const Matrix4& modelViewProjection);
@@ -67,7 +69,7 @@ public:
     [[nodiscard]] bool ReloadShaders();
     [[nodiscard]] bool ReplaceShaderSource(std::string source);
     void BeginGpuProfile(); // Start before BeginShadow/BeginFrame.
-    void EndGpuProfile(); // End after final color draw, before Present.
+    std::uint64_t EndGpuProfile(); // Submitted sample ID, or 0 when skipped; before Present.
     [[nodiscard]] GpuTimings PollGpuProfile(); // Nonblocking; last completed sample or invalid.
     // Synchronous diagnostic readback. Call before Present; never in normal frame path.
     [[nodiscard]] FrameImage Readback();

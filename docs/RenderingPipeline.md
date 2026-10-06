@@ -1,6 +1,6 @@
 # DirectX 11 렌더링 파이프라인
 
-이 문서는 REMI 0.11.0의 **실제 구현**을 설명한다. 코드 기준점은 `engine/src/render/Renderer.cpp`, `engine/src/render/SceneRenderer.cpp`, `shaders/Basic.hlsl`이다. 렌더러는 D3D feature level 11.0, HLSL shader model 5.0, Windows swap chain을 사용한다.
+이 문서는 REMI 0.11.0의 **실제 구현**을 설명한다. 코드 기준점은 `engine/src/render/Renderer.cpp`, `engine/src/render/SceneRenderer.cpp`, `engine/src/render/SceneRenderSession.cpp`, `shaders/Basic.hlsl`이다. 렌더러는 D3D feature level 11.0, HLSL shader model 5.0, Windows swap chain을 사용한다.
 
 ## 초기화와 데이터
 
@@ -22,6 +22,8 @@ flowchart LR
 
 `DrawScene`은 각 보이는 MeshComponent의 월드 행렬을 구하고, 메시 핸들을 해결한 뒤 프러스텀 검사와 draw call을 실행한다. Shadow pass에는 광원 view-projection, color pass에는 카메라 view-projection을 전달한다. Static mesh는 로컬 AABB의 여덟 모서리를 클립 공간으로 보내 컬링한다. Dynamic mesh는 현재 포즈의 경계가 달라지므로 컬링하지 않는다. 이 선택은 잘못 사라지는 문제를 피하지만 큰 장면에서는 성능 비용이 있다.
 
+`SceneRenderSession`은 Gravity와 Relay가 공유하는 **패스 조립과 소유권** 계층이다. Renderer와 `ResourceCache<Mesh>`를 함께 소유하고, `DrawShadow`/`DrawColor`에서 `DrawScene`의 핸들 조회·누락 검사 및 그림자 패스 시작/종료를 실행한다. 각 패스의 추가 드로 콜백으로 Gravity의 glTF 캐릭터를 그릴 수 있다. 카메라·광원 설정, HUD, 게임별 계측, `Present`는 게임 Layer에 남긴다. 종료 시 게임별 Mesh/HUD를 먼저 해제한 뒤 세션이 Mesh 캐시와 Renderer 순서로 해제·진단한다. Render graph나 범용 게임 프레임워크는 아니다.
+
 ## 좌표 변환
 
 `Matrix4`는 row-major 저장과 row-vector 곱셈을 사용한다. 로컬→월드→뷰→투영 순서로 `world * viewProjection`을 만들고, HLSL에서는 `mul(float4(position,1), g_ModelViewProjection)`으로 계산한다. 부모 Transform은 자식 로컬 행렬 뒤에 부모 행렬을 곱한다. `BakedAnimation`의 Blender 도구는 Z-up/right-handed 정점을 REMI의 Y-up/left-handed 좌표로 변환하고 삼각형 winding을 뒤집는다.
@@ -39,6 +41,8 @@ Color pass는 광원 클립 좌표를 UV로 변환하고 `SampleCmpLevelZero`를
 게임은 색상 장면 뒤에 Pretendard HUD와 디버그 UI를 그린 뒤 `Present`한다. HUD는 독립적인 UI 프레임워크가 아니라 현재 renderer의 메시 경로를 이용한다. Backbuffer 읽기는 스크린샷·진단 시에만 실행하며 일반 프레임 경로에서는 수행하지 않는다.
 
 ## 계측과 검증
+
+컬링 ON/OFF의 CPU 제출·WARP GPU color 측정과 동일 픽셀 검사는 [PerformanceEvidence](PerformanceEvidence.md)에 재현 명령·원시 CSV와 함께 기록했다. `EndGpuProfile`은 제출한 샘플 ID(건너뛰면 0)를 반환하므로 완료된 결과를 정확한 프레임과 연결할 수 있다. 일반 게임 루프는 기존처럼 비동기로 결과를 읽는다.
 
 CPU profiler는 physics/shadow/color/present 구간을 측정한다. GPU는 timestamp/disjoint query 네 세트를 순환하며, 결과가 준비되지 않으면 기다리지 않고 샘플을 건너뛴다. `REMIGravity --profile-csv <파일> --profile-frames <N>`으로 프레임별 CSV를 만들 수 있다. 비교 시 해상도, 하드웨어/WARP, VSync, 빌드 설정과 같은 조건을 고정해야 한다. GPU 결과의 `gpu_valid`를 확인한 뒤 유효한 샘플만 집계한다.
 
