@@ -1,5 +1,7 @@
 # REMI Engine
 
+한국어 · [English](README.en.md)
+
 **C++20 · Direct3D 11 · HLSL · Win32 · Windows x64**  
 현재 버전: **0.11.0**
 
