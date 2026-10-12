@@ -5,7 +5,7 @@ See docs/character-quinn.md. Does not alter the Wuwa project.
 from pathlib import Path
 import unreal
 
-repo = Path(__file__).resolve().parent.parent
+repo = Path(__file__).resolve().parents[2]
 output = repo / "build" / "ue-export" / "output"
 output.mkdir(parents=True, exist_ok=True)
 root = "/Game/Characters/Mannequins/"

@@ -9,5 +9,7 @@ struct MaterialProperties {
     float roughness = .6f;
     float emissive = 0;
     ShadingModel shadingModel = ShadingModel::Standard;
+    Vec3 emissiveFactor{};
+    float alphaCutoff = 0; // Zero keeps the opaque path; positive values discard masked pixels.
 };
 }

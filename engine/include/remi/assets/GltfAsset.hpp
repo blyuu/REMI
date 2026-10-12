@@ -3,6 +3,7 @@
 #include <remi/animation/Animator.hpp>
 #include <remi/core/JobSystem.hpp>
 #include <remi/render/Renderer.hpp>
+#include <remi/render/MaterialGraph.hpp>
 #include <remi/resources/ResourceCache.hpp>
 #include <remi/scene/Scene.hpp>
 #include <filesystem>
@@ -18,6 +19,8 @@ public:
     [[nodiscard]] bool HasSkeleton() const noexcept { return model_.HasSkeleton(); }
     [[nodiscard]] std::size_t PrimitiveCount() const noexcept { return primitives_.size(); }
     [[nodiscard]] const MaterialProperties& MaterialAt(std::size_t primitive) const { return primitives_.at(primitive).material; }
+    // Bakes graph factors into one primitive while retaining its imported texture bindings.
+    void ApplyMaterialGraph(std::size_t primitive, const MaterialGraph& graph);
     [[nodiscard]] std::vector<std::string> ClipNames() const;
     [[nodiscard]] bool SetClip(std::string_view name, float crossfadeSeconds = .2f);
     void Update(Renderer& renderer, float dt);

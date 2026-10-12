@@ -331,6 +331,8 @@ bool Load(const std::string& path, Model& out)
         dst.occlusionImage=ImageIndex(data,src.occlusion_texture);
         dst.occlusionStrength=src.occlusion_texture.scale;
         dst.normalImage  = ImageIndex(data, src.normal_texture);
+        dst.emissiveImage = ImageIndex(data, src.emissive_texture);
+        dst.emissiveFactor = {src.emissive_factor[0], src.emissive_factor[1], src.emissive_factor[2]};
         dst.doubleSided  = src.double_sided != 0;
         dst.alphaMask    = (src.alpha_mode == cgltf_alpha_mode_mask);
         dst.alphaCutoff  = src.alpha_cutoff;

@@ -2,7 +2,7 @@
 
 Input: build/ue-export/output/{quinn_mesh,quinn_idle,quinn_run}.fbx and
 T_Quinn_{01,02}ID_D.png exported from the UE 5.5 third-person template.
-Run with Blender 5.1: blender --background --python tools/bake_quinn.py
+Run with Blender 5.1: blender --background --python tools/assets/bake_quinn.py
 """
 import struct
 from pathlib import Path
@@ -10,7 +10,7 @@ from pathlib import Path
 import bpy
 import numpy as np
 
-repo = Path(__file__).resolve().parent.parent
+repo = Path(__file__).resolve().parents[2]
 source = repo / "build" / "ue-export" / "output"
 destination = repo / "assets" / "Quinn" / "quinn.rmc"
 

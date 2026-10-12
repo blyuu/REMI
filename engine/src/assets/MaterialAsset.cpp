@@ -13,6 +13,7 @@ const char* ModelName(ShadingModel model) {
     case ShadingModel::Standard: return "Standard";
     case ShadingModel::Unlit: return "Unlit";
     case ShadingModel::Toon: return "Toon";
+    case ShadingModel::PBR: return "PBR";
     default: throw std::invalid_argument("Unknown shading model");
     }
 }
@@ -20,6 +21,7 @@ ShadingModel ParseModel(const std::string& name) {
     if (name == "Standard") return ShadingModel::Standard;
     if (name == "Unlit") return ShadingModel::Unlit;
     if (name == "Toon") return ShadingModel::Toon;
+    if (name == "PBR") return ShadingModel::PBR;
     throw std::runtime_error("Unknown shading model: " + name);
 }
 void Validate(const MaterialAsset& material) {

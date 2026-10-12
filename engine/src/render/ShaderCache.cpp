@@ -24,7 +24,8 @@ const std::vector<std::uint8_t>& ShaderCache::Get(ShaderKey key) {
     const char* entry = key.stage == ShaderStage::Vertex ? "VSMain" : "PSMain";
     const char* profile = key.stage == ShaderStage::Vertex ? "vs_5_0" : "ps_5_0";
     const char* model = key.shadingModel == ShadingModel::Unlit ? "1" :
-                        key.shadingModel == ShadingModel::Toon ? "2" : "0";
+                        key.shadingModel == ShadingModel::Toon ? "2" :
+                        key.shadingModel == ShadingModel::PBR ? "3" : "0";
     const D3D_SHADER_MACRO macros[] = {{"SHADING_MODEL", model}, {nullptr, nullptr}};
     UINT flags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_WARNINGS_ARE_ERRORS;
 #ifdef _DEBUG

@@ -15,9 +15,9 @@ public:
     [[nodiscard]] Renderer& Device();
     [[nodiscard]] ResourceCache<Mesh>& Meshes();
     [[nodiscard]] SceneDrawStats DrawShadow(const Scene& scene, const Matrix4& lightViewProjection,
-        const ExtraDraw& extra = {});
+        const ExtraDraw& extra = {}, bool cull = true);
     [[nodiscard]] SceneDrawStats DrawColor(const Scene& scene, const Matrix4& viewProjection,
-        const DirectionalLight& light, const ExtraDraw& extra = {});
+        const DirectionalLight& light, const ExtraDraw& extra = {}, bool cull = true);
     void RequireCleanDiagnostics();
     [[nodiscard]] ShutdownReport ShutdownAndValidate();
 private:

@@ -1,6 +1,7 @@
 #pragma once
 #include <remi/render/Camera.hpp>
 #include <remi/render/Material.hpp>
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -19,6 +20,8 @@ struct RendererConfig {
     bool requestDebug = true;
     bool requireDebug = false;
     bool vsync = true;
+    bool bloom = false;
+    bool deferred = false; // Scene geometry to G-buffer, then one lighting pass; overlays remain forward.
 };
 class Mesh {
 public:
@@ -35,12 +38,26 @@ private:
 struct FrameImage { unsigned width = 0, height = 0; std::vector<std::uint8_t> rgba; };
 struct ShutdownReport { bool debugValidated = false; unsigned liveChildren = 0; unsigned priorWarnings = 0; };
 struct GpuTimings { bool valid = false; double shadowMs = 0, colorMs = 0, totalMs = 0; std::uint64_t sampleId = 0; };
+struct PointLight {
+    Vec3 position{};
+    float radius = 0;
+    Vec3 color{};
+    float intensity = 0;
+};
 struct DirectionalLight {
     Vec3 direction{-.5f,-1,.4f}; // Direction in which light travels.
     float intensity = 1;
     Vec3 color{1,.96f,.88f};
     float ambient = .18f;
     Vec3 cameraPosition{};
+    // Optional environment grade. Zero exposure keeps the legacy light path.
+    Vec3 skyAmbient{};
+    Vec3 groundAmbient{};
+    float exposure = 0;
+    Vec3 fogColor{};
+    float fogDensity = 0;
+    std::array<PointLight,8> pointLights{};
+    unsigned pointCount = 0;
 };
 [[nodiscard]] Matrix4 DirectionalShadowMatrix(Vec3 center, Vec3 direction, float extent = 16);
 class Renderer {
@@ -55,6 +72,13 @@ public:
     void SetMeshTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba, bool srgb = true);
     // Shares the immutable texture allocation; either mesh may be destroyed first.
     void ShareMeshTexture(Mesh& target, const Mesh& source);
+    void SetMeshEmissiveTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba);
+    void ShareMeshEmissiveTexture(Mesh& target, const Mesh& source);
+    void SetMeshNormalTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba);
+    void ShareMeshNormalTexture(Mesh& target, const Mesh& source);
+    // glTF metallic-roughness packing: R=occlusion, G=roughness, B=metallic.
+    void SetMeshORMTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba);
+    void ShareMeshORMTexture(Mesh& target, const Mesh& source);
     void Resize(unsigned width, unsigned height);
     void BeginFrame(Vec3 clearColor = {.035f, .055f, .085f});
     void Draw(const Mesh& mesh, const Matrix4& modelViewProjection);
@@ -64,6 +88,13 @@ public:
     // Reuses the transform already computed for culling.
     void DrawLitPrepared(const Mesh& mesh, const Matrix4& world, const Matrix4& modelViewProjection, const DirectionalLight& light, const MaterialProperties& material = {});
     void Present();
+    // Resolve the optional scene color target before drawing UI overlays.
+    void ApplyPostProcess();
+    void ResolveDeferred(const DirectionalLight& light);
+    void SetDeferredEnabled(bool enabled);
+    [[nodiscard]] bool DeferredEnabled() const noexcept;
+    void SetWireframeEnabled(bool enabled);
+    [[nodiscard]] bool WireframeEnabled() const noexcept;
     // Rebuilds shader objects and the input layout after a source change.
     // Compile failures leave the previous GPU shaders active.
     [[nodiscard]] bool ReloadShaders();
@@ -71,6 +102,7 @@ public:
     void BeginGpuProfile(); // Start before BeginShadow/BeginFrame.
     std::uint64_t EndGpuProfile(); // Submitted sample ID, or 0 when skipped; before Present.
     [[nodiscard]] GpuTimings PollGpuProfile(); // Nonblocking; last completed sample or invalid.
+    [[nodiscard]] unsigned DrawCallCount() const noexcept; // Calls submitted since BeginGpuProfile.
     // Synchronous diagnostic readback. Call before Present; never in normal frame path.
     [[nodiscard]] FrameImage Readback();
     void SaveScreenshot(const std::filesystem::path& path);

@@ -33,6 +33,7 @@ void ValidateSize(unsigned width, unsigned height) {
 }
 }
 struct DeviceOwnership { std::size_t meshes = 0; };
+struct PostVertex { Vec3 position; Vec2 uv; };
 struct DrawConstants {
     Matrix4 mvp, world, lightMatrix;
     Vec3 direction; float intensity = 0;
@@ -42,17 +43,29 @@ struct DrawConstants {
     Vec3 materialTint{1,1,1}; float metallic = 0;
     float roughness = .6f; float emissive = 0; float materialPadding[2]{};
     float hasBaseColorTexture = 0; float texturePadding[3]{};
+    Vec3 emissiveFactor{}; float hasEmissiveTexture = 0;
+    float hasNormalTexture = 0; float normalPadding[3]{};
+    Vec3 skyAmbient{}; float exposure = 0;
+    Vec3 groundAmbient{}; float environmentPadding = 0;
+    Vec3 fogColor{}; float fogDensity = 0;
+    float pointPositions[8][4]{};
+    float pointColors[8][4]{};
+    float pointCount = 0; float pointPadding[3]{};
+    float hasOrmTexture = 0, alphaCutoff = 0, pbrPadding[2]{};
 };
 struct GpuQuerySet {
     ComPtr<ID3D11Query> disjoint, start, shadowEnd, colorEnd;
     bool pending = false;
     std::uint64_t sequence = 0;
 };
-static_assert(sizeof(DrawConstants) == 304);
+static_assert(sizeof(DrawConstants) == 672);
 struct Mesh::Impl {
     LifetimeToken lifetime{OwnedKind::Mesh};
     std::unique_ptr<rhi::IRHIBuffer> vertices, indices;
     std::shared_ptr<rhi::IRHITexture> baseColorTexture;
+    std::shared_ptr<rhi::IRHITexture> emissiveTexture;
+    std::shared_ptr<rhi::IRHITexture> normalTexture;
+    std::shared_ptr<rhi::IRHITexture> ormTexture;
     std::shared_ptr<DeviceOwnership> ownership;
     ID3D11Device* owner = nullptr;
     UINT count = 0, vertexCount = 0;
@@ -103,8 +116,20 @@ struct Renderer::Impl {
     ComPtr<ID3D11DeviceContext> context;
     std::array<std::unique_ptr<rhi::IRHIPipeline>, static_cast<std::size_t>(ShadingModel::Count)> pipelines;
     std::unique_ptr<rhi::IRHIPipeline> shadowPipeline;
+    std::unique_ptr<rhi::IRHIPipeline> solidPipeline;
+    std::unique_ptr<rhi::IRHIPipeline> postPipeline;
+    std::unique_ptr<rhi::IRHIPipeline> geometryPipeline, deferredLightingPipeline;
     std::unique_ptr<ShaderCache> shaderCache;
+    std::unique_ptr<ShaderCache> postShaderCache;
+    std::unique_ptr<ShaderCache> geometryShaderCache, deferredLightingShaderCache;
     std::unique_ptr<rhi::IRHIBuffer> constants;
+    std::unique_ptr<rhi::IRHIBuffer> postVertices, postIndices;
+    std::unique_ptr<rhi::IRHIRenderTarget> sceneTarget;
+    std::array<ComPtr<ID3D11Texture2D>,4> gbufferTextures;
+    std::array<ComPtr<ID3D11RenderTargetView>,4> gbufferRTVs;
+    std::array<ComPtr<ID3D11ShaderResourceView>,4> gbufferSRVs;
+    ComPtr<ID3D11Texture2D> gbufferDepthTexture;
+    ComPtr<ID3D11DepthStencilView> gbufferDepth;
     ComPtr<ID3D11Texture2D> shadowTexture;
     ComPtr<ID3D11DepthStencilView> shadowDepth;
     ComPtr<ID3D11ShaderResourceView> shadowView;
@@ -114,34 +139,92 @@ struct Renderer::Impl {
     int gpuActive = -1;
     GpuTimings lastGpuTimings;
     std::uint64_t gpuSequence = 0, lastGpuSequence = 0;
+    unsigned drawCallCount = 0;
     Matrix4 lightMatrix = Matrix4::Identity();
     bool shadowPass = false, shadowReady = false;
     ComPtr<ID3D11InfoQueue> diagnostics;
     unsigned width = 0, height = 0;
     bool vsync = true, activeFrame = false;
+    bool bloom = false, postResolved = true;
+    bool deferred = false, deferredActive = false;
+    bool wireframe = false;
+    std::filesystem::path shaderDirectory;
+    Vec3 frameClear{.035f,.055f,.085f};
     bool closed = false;
     ShutdownReport shutdownReport;
     ~Impl() { if (context) { context->ClearState(); context->Flush(); } }
+    void CreateGBuffer() {
+        for (auto& item : gbufferRTVs) item.Reset();
+        for (auto& item : gbufferSRVs) item.Reset();
+        for (auto& item : gbufferTextures) item.Reset();
+        gbufferDepth.Reset(); gbufferDepthTexture.Reset();
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width=width; desc.Height=height; desc.ArraySize=1; desc.MipLevels=1;
+        desc.SampleDesc.Count=1; desc.Format=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE;
+        for (unsigned i=0;i<4;++i) {
+            Check(device->CreateTexture2D(&desc,nullptr,&gbufferTextures[i]),"Create G-buffer texture");
+            Check(device->CreateRenderTargetView(gbufferTextures[i].Get(),nullptr,&gbufferRTVs[i]),"Create G-buffer RTV");
+            Check(device->CreateShaderResourceView(gbufferTextures[i].Get(),nullptr,&gbufferSRVs[i]),"Create G-buffer SRV");
+        }
+        desc.Format=DXGI_FORMAT_D32_FLOAT; desc.BindFlags=D3D11_BIND_DEPTH_STENCIL;
+        Check(device->CreateTexture2D(&desc,nullptr,&gbufferDepthTexture),"Create G-buffer depth");
+        Check(device->CreateDepthStencilView(gbufferDepthTexture.Get(),nullptr,&gbufferDepth),"Create G-buffer DSV");
+    }
     void BuildPipelines() {
         rhi::PipelineDesc desc;
         desc.vertexShader = shaderCache->Get({ShaderStage::Vertex});
         desc.inputs = {{"POSITION",0,rhi::VertexFormat::Float3}, {"COLOR",12,rhi::VertexFormat::Float3},
             {"NORMAL",24,rhi::VertexFormat::Float3}, {"TEXCOORD",36,rhi::VertexFormat::Float2}};
         std::array<std::unique_ptr<rhi::IRHIPipeline>, static_cast<std::size_t>(ShadingModel::Count)> next;
+        desc.pixelShader = shaderCache->Get({ShaderStage::Pixel,ShadingModel::Standard});
+        auto solid = rhiDevice->CreatePipeline(desc);
         for (std::size_t i = 0; i < next.size(); ++i) {
             desc.pixelShader = shaderCache->Get({ShaderStage::Pixel, static_cast<ShadingModel>(i)});
+            desc.cullBack = static_cast<ShadingModel>(i) != ShadingModel::PBR;
+            desc.wireframe = wireframe;
             next[i] = rhiDevice->CreatePipeline(desc);
         }
-        desc.pixelShader.clear(); desc.depthBias = 1000; desc.slopeScaledDepthBias = 2;
+        desc.pixelShader.clear(); desc.cullBack=true; desc.wireframe=false;
+        desc.depthBias = 1000; desc.slopeScaledDepthBias = 2;
         auto shadow = rhiDevice->CreatePipeline(desc);
-        pipelines.swap(next); shadowPipeline.swap(shadow);
+        std::unique_ptr<rhi::IRHIPipeline> post;
+        if (bloom) {
+            rhi::PipelineDesc postDesc;
+            postDesc.vertexShader = postShaderCache->Get({ShaderStage::Vertex});
+            postDesc.pixelShader = postShaderCache->Get({ShaderStage::Pixel});
+            postDesc.inputs = {{"POSITION",0,rhi::VertexFormat::Float3},
+                {"TEXCOORD",12,rhi::VertexFormat::Float2}};
+            postDesc.depthTest = false; postDesc.cullBack = false;
+            post = rhiDevice->CreatePipeline(postDesc);
+        }
+        std::unique_ptr<rhi::IRHIPipeline> geometry, lighting;
+        if (deferred) {
+            rhi::PipelineDesc geoDesc = desc;
+            geoDesc.depthBias=0; geoDesc.slopeScaledDepthBias=0;
+            geoDesc.cullBack=false; // Masked hair cards need both sides.
+            geoDesc.wireframe=wireframe;
+            geoDesc.vertexShader=geometryShaderCache->Get({ShaderStage::Vertex});
+            geoDesc.pixelShader=geometryShaderCache->Get({ShaderStage::Pixel});
+            geometry=rhiDevice->CreatePipeline(geoDesc);
+            rhi::PipelineDesc lightDesc;
+            lightDesc.vertexShader=deferredLightingShaderCache->Get({ShaderStage::Vertex});
+            lightDesc.pixelShader=deferredLightingShaderCache->Get({ShaderStage::Pixel});
+            lightDesc.inputs={{"POSITION",0,rhi::VertexFormat::Float3},{"TEXCOORD",12,rhi::VertexFormat::Float2}};
+            lightDesc.depthTest=false; lightDesc.cullBack=false;
+            lighting=rhiDevice->CreatePipeline(lightDesc);
+        }
+        pipelines.swap(next); shadowPipeline.swap(shadow); solidPipeline.swap(solid);
+        postPipeline.swap(post);
+        geometryPipeline.swap(geometry); deferredLightingPipeline.swap(lighting);
     }
 };
 
 Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>()) {
     ValidateSize(config.width, config.height);
     if (!config.nativeWindow || !IsWindow(static_cast<HWND>(config.nativeWindow))) throw std::invalid_argument("Renderer requires a live HWND");
-    auto& r = *impl_; r.vsync = config.vsync;
+    auto& r = *impl_; r.vsync = config.vsync; r.bloom = config.bloom; r.deferred=config.deferred;
+    r.shaderDirectory=config.shaderFile.parent_path();
     r.rhiDevice = rhi::CreateDevice({rhi::Backend::D3D11,
         config.useWarp ? rhi::Driver::Warp : rhi::Driver::Hardware, config.requestDebug, config.requireDebug});
     auto& backend = static_cast<rhi::D3D11Device&>(*r.rhiDevice);
@@ -152,10 +235,25 @@ Renderer::Renderer(const RendererConfig& config) : impl_(std::make_unique<Impl>(
     Log(std::string("D3D11 FL11.0 / ") + (config.useWarp ? "WARP" : "hardware") + (r.diagnostics ? " / debug ON" : " / debug OFF"));
     Log("Adapter: " + backend.Info().adapterName);
     r.surface = r.rhiDevice->CreateSurface(config.nativeWindow,config.width,config.height);
+    if (r.bloom) r.sceneTarget = r.rhiDevice->CreateRenderTarget({config.width,config.height,true});
     r.width = config.width; r.height = config.height;
+    if (r.deferred) r.CreateGBuffer();
     r.shaderCache = std::make_unique<ShaderCache>(config.shaderFile, config.shaderSource);
+    if (r.bloom) r.postShaderCache = std::make_unique<ShaderCache>(config.shaderFile.parent_path()/"PostProcess.hlsl");
+    if (r.deferred) {
+        r.geometryShaderCache=std::make_unique<ShaderCache>(config.shaderFile.parent_path()/"DeferredGeometry.hlsl");
+        r.deferredLightingShaderCache=std::make_unique<ShaderCache>(config.shaderFile.parent_path()/"DeferredLighting.hlsl");
+    }
     static_assert(sizeof(Vertex) == 44 && offsetof(Vertex, color) == 12 && offsetof(Vertex, normal) == 24 && offsetof(Vertex, uv) == 36);
     r.BuildPipelines();
+    if (r.bloom || r.deferred) {
+        constexpr PostVertex vertices[] = {
+            {{-1.f, 1.f,0.f},{0.f,0.f}}, {{1.f,1.f,0.f},{1.f,0.f}},
+            {{1.f,-1.f,0.f},{1.f,1.f}}, {{-1.f,-1.f,0.f},{0.f,1.f}}};
+        constexpr std::uint32_t indices[] = {0,1,2,0,2,3};
+        r.postVertices = r.rhiDevice->CreateBuffer({sizeof(vertices),rhi::BufferBind::Vertex,false,vertices});
+        r.postIndices = r.rhiDevice->CreateBuffer({sizeof(indices),rhi::BufferBind::Index,false,indices});
+    }
     static_assert(sizeof(Matrix4) == 64);
     r.constants = r.rhiDevice->CreateBuffer({sizeof(DrawConstants), rhi::BufferBind::Constant, true, nullptr});
     D3D11_TEXTURE2D_DESC shadow{}; shadow.Width = shadow.Height = 2048; shadow.MipLevels = shadow.ArraySize = 1;
@@ -242,30 +340,138 @@ void Renderer::ShareMeshTexture(Mesh& target, const Mesh& source) {
         throw std::invalid_argument("Cannot share textures across devices");
     target.impl_->baseColorTexture = source.impl_->baseColorTexture;
 }
+void Renderer::SetMeshEmissiveTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (mesh.impl_->owner != r.device.Get() || !width || !height ||
+        static_cast<std::uint64_t>(width) * height * 4 != rgba.size())
+        throw std::invalid_argument("Invalid mesh emissive texture");
+    mesh.impl_->emissiveTexture = r.rhiDevice->CreateTexture({width, height,
+        rhi::TextureFormat::RGBA8Srgb, false, rgba.data()});
+}
+void Renderer::ShareMeshEmissiveTexture(Mesh& target, const Mesh& source) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (target.impl_->owner != r.device.Get() || source.impl_->owner != r.device.Get())
+        throw std::invalid_argument("Cannot share textures across devices");
+    target.impl_->emissiveTexture = source.impl_->emissiveTexture;
+}
+void Renderer::SetMeshNormalTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (mesh.impl_->owner != r.device.Get() || !width || !height ||
+        static_cast<std::uint64_t>(width) * height * 4 != rgba.size())
+        throw std::invalid_argument("Invalid mesh normal texture");
+    mesh.impl_->normalTexture = r.rhiDevice->CreateTexture({width, height,
+        rhi::TextureFormat::RGBA8, false, rgba.data()});
+}
+void Renderer::ShareMeshNormalTexture(Mesh& target, const Mesh& source) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (target.impl_->owner != r.device.Get() || source.impl_->owner != r.device.Get())
+        throw std::invalid_argument("Cannot share textures across devices");
+    target.impl_->normalTexture = source.impl_->normalTexture;
+}
+void Renderer::SetMeshORMTexture(Mesh& mesh, unsigned width, unsigned height, std::span<const std::uint8_t> rgba) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (mesh.impl_->owner != r.device.Get() || !width || !height ||
+        static_cast<std::uint64_t>(width) * height * 4 != rgba.size())
+        throw std::invalid_argument("Invalid mesh ORM texture");
+    mesh.impl_->ormTexture = r.rhiDevice->CreateTexture({width,height,rhi::TextureFormat::RGBA8,false,rgba.data()});
+}
+void Renderer::ShareMeshORMTexture(Mesh& target, const Mesh& source) {
+    auto& r = *impl_;
+    if (r.closed) throw std::logic_error("Renderer is shut down");
+    if (target.impl_->owner != r.device.Get() || source.impl_->owner != r.device.Get())
+        throw std::invalid_argument("Cannot share ORM textures across devices");
+    target.impl_->ormTexture = source.impl_->ormTexture;
+}
 void Renderer::Resize(unsigned width, unsigned height) {
     auto& r = *impl_;
     if (r.closed) throw std::logic_error("Renderer is shut down");
     if (!width || !height || (width == r.width && height == r.height)) return;
     ValidateSize(width, height);
     r.activeFrame = false;
+    if (r.bloom) {
+        r.context->OMSetRenderTargets(0,nullptr,nullptr);
+        r.sceneTarget.reset();
+    }
+    if (r.deferred) r.context->OMSetRenderTargets(0,nullptr,nullptr);
     r.surface->Resize(width,height);
+    if (r.bloom) r.sceneTarget = r.rhiDevice->CreateRenderTarget({width,height,true});
     r.width = width; r.height = height;
+    if (r.deferred) r.CreateGBuffer();
 }
+void Renderer::SetDeferredEnabled(bool enabled) {
+    auto& r=*impl_;
+    if (r.closed || r.activeFrame || r.shadowPass) throw std::logic_error("Change render path between frames");
+    if (r.deferred == enabled) return;
+    if (enabled) {
+        if (!r.geometryShaderCache) {
+            if (r.shaderDirectory.empty()) throw std::logic_error("Deferred shaders need a shader directory");
+            r.geometryShaderCache=std::make_unique<ShaderCache>(r.shaderDirectory/"DeferredGeometry.hlsl");
+            r.deferredLightingShaderCache=std::make_unique<ShaderCache>(r.shaderDirectory/"DeferredLighting.hlsl");
+        }
+        if (!r.postVertices) {
+            constexpr PostVertex vertices[] = {
+                {{-1.f,1.f,0.f},{0.f,0.f}},{{1.f,1.f,0.f},{1.f,0.f}},
+                {{1.f,-1.f,0.f},{1.f,1.f}},{{-1.f,-1.f,0.f},{0.f,1.f}}};
+            constexpr std::uint32_t indices[] = {0,1,2,0,2,3};
+            r.postVertices=r.rhiDevice->CreateBuffer({sizeof(vertices),rhi::BufferBind::Vertex,false,vertices});
+            r.postIndices=r.rhiDevice->CreateBuffer({sizeof(indices),rhi::BufferBind::Index,false,indices});
+        }
+        r.CreateGBuffer();
+    }
+    r.deferred=enabled;
+    try { r.BuildPipelines(); }
+    catch (...) { r.deferred=!enabled; throw; }
+}
+bool Renderer::DeferredEnabled() const noexcept { return impl_->deferred; }
+void Renderer::SetWireframeEnabled(bool enabled) {
+    auto& r=*impl_;
+    if (r.closed || r.activeFrame || r.shadowPass) throw std::logic_error("Change wireframe between frames");
+    if (r.wireframe==enabled) return;
+    r.wireframe=enabled;
+    try { r.BuildPipelines(); }
+    catch (...) { r.wireframe=!enabled; throw; }
+}
+bool Renderer::WireframeEnabled() const noexcept { return impl_->wireframe; }
 void Renderer::BeginFrame(Vec3 color) {
     auto& r = *impl_;
     if (r.closed) throw std::logic_error("Renderer is shut down");
     if (r.shadowPass) throw std::logic_error("End shadow pass before BeginFrame");
     const float clear[] = {color.x, color.y, color.z, 1};
-    r.surface->BeginColorPass(clear);
     auto& commands = r.rhiDevice->Context();
-    commands.BeginExternalPass();
-    commands.SetPipeline(*r.pipelines[0]);
+    r.frameClear=color;
+    if (r.deferred) {
+        ID3D11ShaderResourceView* empty[4]{};
+        r.context->PSSetShaderResources(1,4,empty);
+        ID3D11RenderTargetView* targets[4]{};
+        for (unsigned i=0;i<4;++i) {
+            targets[i]=r.gbufferRTVs[i].Get();
+            constexpr float zero[4]{};
+            r.context->ClearRenderTargetView(targets[i],zero);
+        }
+        r.context->OMSetRenderTargets(4,targets,r.gbufferDepth.Get());
+        r.context->ClearDepthStencilView(r.gbufferDepth.Get(),D3D11_CLEAR_DEPTH,1,0);
+        const D3D11_VIEWPORT viewport{0,0,static_cast<float>(r.width),static_cast<float>(r.height),0,1};
+        r.context->RSSetViewports(1,&viewport);
+        commands.BeginExternalPass();
+        commands.SetPipeline(*r.geometryPipeline);
+        r.deferredActive=true;
+    } else {
+        if (r.bloom) commands.BeginPass(*r.sceneTarget,clear);
+        else { r.surface->BeginColorPass(clear); commands.BeginExternalPass(); }
+        commands.SetPipeline(*r.pipelines[0]);
+    }
     commands.SetConstantBuffer(0, *r.constants);
     r.context->PSSetShaderResources(0,1,r.shadowView.GetAddressOf());
     r.context->PSSetSamplers(0,1,r.shadowSampler.GetAddressOf());
     r.shadowPass = false;
     r.shadowReady = false;
     r.activeFrame = true;
+    r.postResolved = !r.bloom;
 }
 void Renderer::Draw(const Mesh& mesh, const Matrix4& mvp) {
     DrawInternal(mesh,mvp,Matrix4::Identity(),nullptr,{});
@@ -303,12 +509,31 @@ void Renderer::DrawLitPrepared(const Mesh& mesh, const Matrix4& world, const Mat
         !std::isfinite(light.color.z) || light.color.x < 0 || light.color.y < 0 || light.color.z < 0 ||
         !std::isfinite(light.cameraPosition.x) || !std::isfinite(light.cameraPosition.y) || !std::isfinite(light.cameraPosition.z))
         throw std::invalid_argument("Invalid directional light");
+    if (!std::isfinite(light.exposure) || light.exposure < 0 || light.exposure > 8 ||
+        !std::isfinite(light.fogDensity) || light.fogDensity < 0 || light.fogDensity > 1 ||
+        !std::isfinite(light.fogColor.x) || !std::isfinite(light.fogColor.y) || !std::isfinite(light.fogColor.z) ||
+        !std::isfinite(light.skyAmbient.x) || !std::isfinite(light.skyAmbient.y) || !std::isfinite(light.skyAmbient.z) ||
+        !std::isfinite(light.groundAmbient.x) || !std::isfinite(light.groundAmbient.y) || !std::isfinite(light.groundAmbient.z))
+        throw std::invalid_argument("Invalid environment light");
+    if (light.pointCount > light.pointLights.size()) throw std::invalid_argument("Too many point lights");
+    for (unsigned i = 0; i < light.pointCount; ++i) {
+        const auto& point = light.pointLights[i];
+        if (!std::isfinite(point.position.x) || !std::isfinite(point.position.y) || !std::isfinite(point.position.z) ||
+            !std::isfinite(point.radius) || point.radius <= 0 ||
+            !std::isfinite(point.color.x) || !std::isfinite(point.color.y) || !std::isfinite(point.color.z) ||
+            !std::isfinite(point.intensity) || point.intensity < 0)
+            throw std::invalid_argument("Invalid point light");
+    }
     if (!std::isfinite(material.tint.x) || !std::isfinite(material.tint.y) || !std::isfinite(material.tint.z) ||
         material.tint.x < 0 || material.tint.y < 0 || material.tint.z < 0 ||
         !std::isfinite(material.metallic) || material.metallic < 0 || material.metallic > 1 ||
         !std::isfinite(material.roughness) || material.roughness < .04f || material.roughness > 1 ||
         !std::isfinite(material.emissive) || material.emissive < 0 || material.emissive > 2 ||
-        material.shadingModel >= ShadingModel::Count)
+        !std::isfinite(material.emissiveFactor.x) || !std::isfinite(material.emissiveFactor.y) ||
+        !std::isfinite(material.emissiveFactor.z) || material.emissiveFactor.x < 0 ||
+        material.emissiveFactor.y < 0 || material.emissiveFactor.z < 0 ||
+        material.shadingModel >= ShadingModel::Count ||
+        !std::isfinite(material.alphaCutoff) || material.alphaCutoff < 0 || material.alphaCutoff > 1)
         throw std::invalid_argument("Invalid material properties");
     if (impl_->shadowPass) throw std::logic_error("Lit draw inside shadow pass");
     DrawInternal(mesh,modelViewProjection,world,&light,material);
@@ -318,35 +543,144 @@ void Renderer::DrawInternal(const Mesh& mesh, const Matrix4& mvp, const Matrix4&
     if (!r.activeFrame) throw std::logic_error("Draw requires BeginFrame");
     if (mesh.impl_->owner != r.device.Get()) throw std::invalid_argument("Mesh belongs to another device");
     auto& commands = r.rhiDevice->Context();
-    if (!r.shadowPass) commands.SetPipeline(*r.pipelines[static_cast<std::size_t>(light ? material.shadingModel : ShadingModel::Standard)]);
+    if (!r.shadowPass) commands.SetPipeline(r.deferredActive ? *r.geometryPipeline :
+        (light ? *r.pipelines[static_cast<std::size_t>(material.shadingModel)] : *r.solidPipeline));
     DrawConstants constants{}; constants.mvp = mvp; constants.world = world; constants.lightMatrix = r.lightMatrix;
     if (light) { constants.direction = light->direction; constants.intensity = light->intensity; constants.color = light->color;
         constants.ambient = light->ambient; constants.cameraPosition = light->cameraPosition;
+        constants.skyAmbient = light->skyAmbient; constants.groundAmbient = light->groundAmbient;
+        constants.exposure = light->exposure;
+        constants.fogColor = light->fogColor; constants.fogDensity = light->fogDensity;
+        constants.pointCount = static_cast<float>(light->pointCount);
+        for (unsigned i = 0; i < light->pointCount; ++i) {
+            const auto& point = light->pointLights[i];
+            auto& p = constants.pointPositions[i];
+            auto& c = constants.pointColors[i];
+            p[0] = point.position.x; p[1] = point.position.y; p[2] = point.position.z; p[3] = point.radius;
+            c[0] = point.color.x; c[1] = point.color.y; c[2] = point.color.z; c[3] = point.intensity;
+        }
         constants.lit = 1; constants.shadows = r.shadowReady ? 1.f : 0.f; }
     constants.materialTint = material.tint; constants.metallic = material.metallic;
     constants.roughness = material.roughness; constants.emissive = material.emissive;
     constants.hasBaseColorTexture = mesh.impl_->baseColorTexture ? 1.f : 0.f;
+    constants.emissiveFactor = material.emissiveFactor;
+    constants.hasEmissiveTexture = mesh.impl_->emissiveTexture ? 1.f : 0.f;
+    constants.hasNormalTexture = mesh.impl_->normalTexture ? 1.f : 0.f;
+    constants.hasOrmTexture = mesh.impl_->ormTexture ? 1.f : 0.f;
+    constants.alphaCutoff = material.alphaCutoff;
     r.rhiDevice->UpdateBuffer(*r.constants, &constants, sizeof(constants));
-    if (!r.shadowPass) commands.SetTexture(1,mesh.impl_->baseColorTexture.get());
+    if (!r.shadowPass) {
+        commands.SetTexture(1,mesh.impl_->baseColorTexture.get());
+        commands.SetTexture(2,mesh.impl_->emissiveTexture.get());
+        commands.SetTexture(3,mesh.impl_->normalTexture.get());
+        commands.SetTexture(4,mesh.impl_->ormTexture.get());
+    }
     commands.SetVertexBuffer(*mesh.impl_->vertices,sizeof(Vertex));
     commands.SetIndexBuffer(*mesh.impl_->indices);
     commands.DrawIndexed(mesh.impl_->count);
+    ++r.drawCallCount;
 }
 void Renderer::Present() {
     auto& r = *impl_;
     if (!r.activeFrame || r.shadowPass) throw std::logic_error("Present requires color pass");
+    if (r.deferredActive) throw std::logic_error("Resolve deferred lighting before Present");
+    if (r.bloom && !r.postResolved) ApplyPostProcess();
     r.rhiDevice->Context().EndExternalPass();
     r.surface->Present(r.vsync);
     r.activeFrame = false;
+}
+void Renderer::ResolveDeferred(const DirectionalLight& light) {
+    auto& r=*impl_;
+    if (!r.deferred) return;
+    if (light.pointCount>light.pointLights.size() ||
+        !std::isfinite(light.direction.x) || !std::isfinite(light.direction.y) || !std::isfinite(light.direction.z) ||
+        light.direction.x*light.direction.x+light.direction.y*light.direction.y+light.direction.z*light.direction.z<1e-8f)
+        throw std::invalid_argument("Invalid deferred light");
+    if (!r.activeFrame || r.shadowPass || !r.deferredActive)
+        throw std::logic_error("Deferred geometry pass is not active");
+    auto& commands=r.rhiDevice->Context();
+    commands.EndExternalPass();
+    r.context->OMSetRenderTargets(0,nullptr,nullptr);
+    const float clear[]={r.frameClear.x,r.frameClear.y,r.frameClear.z,1};
+    if (r.bloom) commands.BeginPass(*r.sceneTarget,clear);
+    else { r.surface->BeginColorPass(clear); commands.BeginExternalPass(); }
+    DrawConstants constants{};
+    constants.lightMatrix=r.lightMatrix;
+    constants.direction=light.direction; constants.intensity=light.intensity;
+    constants.color=light.color; constants.ambient=light.ambient;
+    constants.cameraPosition=light.cameraPosition;
+    constants.materialTint=r.frameClear;
+    constants.skyAmbient=light.skyAmbient; constants.groundAmbient=light.groundAmbient;
+    constants.exposure=light.exposure; constants.fogColor=light.fogColor; constants.fogDensity=light.fogDensity;
+    constants.shadows=r.shadowReady ? 1.f : 0.f;
+    constants.pointCount=static_cast<float>(light.pointCount);
+    for (unsigned i=0;i<light.pointCount && i<light.pointLights.size();++i) {
+        const auto& point=light.pointLights[i];
+        auto& p=constants.pointPositions[i]; auto& c=constants.pointColors[i];
+        p[0]=point.position.x; p[1]=point.position.y; p[2]=point.position.z; p[3]=point.radius;
+        c[0]=point.color.x; c[1]=point.color.y; c[2]=point.color.z; c[3]=point.intensity;
+    }
+    r.rhiDevice->UpdateBuffer(*r.constants,&constants,sizeof(constants));
+    commands.SetPipeline(*r.deferredLightingPipeline);
+    commands.SetConstantBuffer(0,*r.constants);
+    r.context->PSSetShaderResources(0,1,r.shadowView.GetAddressOf());
+    r.context->PSSetSamplers(0,1,r.shadowSampler.GetAddressOf());
+    ID3D11ShaderResourceView* views[4]{};
+    for (unsigned i=0;i<4;++i) views[i]=r.gbufferSRVs[i].Get();
+    r.context->PSSetShaderResources(1,4,views);
+    commands.SetVertexBuffer(*r.postVertices,sizeof(PostVertex));
+    commands.SetIndexBuffer(*r.postIndices);
+    commands.DrawIndexed(6);
+    ++r.drawCallCount;
+    ID3D11ShaderResourceView* empty[4]{};
+    r.context->PSSetShaderResources(1,4,empty);
+    r.deferredActive=false;
+    r.postResolved=!r.bloom;
+}
+void Renderer::ApplyPostProcess() {
+    auto& r = *impl_;
+    if (!r.activeFrame || r.shadowPass) throw std::logic_error("Post process requires a color pass");
+    if (r.deferredActive) throw std::logic_error("Resolve deferred lighting before post process");
+    if (!r.bloom || r.postResolved) return;
+    auto& commands = r.rhiDevice->Context();
+    commands.EndPass();
+    constexpr float clear[] = {0,0,0,1};
+    r.surface->BeginColorPass(clear);
+    commands.BeginExternalPass();
+    commands.SetPipeline(*r.postPipeline);
+    commands.SetTexture(1,&r.sceneTarget->Color());
+    commands.SetVertexBuffer(*r.postVertices,sizeof(PostVertex));
+    commands.SetIndexBuffer(*r.postIndices);
+    commands.DrawIndexed(6);
+    ++r.drawCallCount;
+    commands.SetTexture(1,nullptr);
+    r.postResolved = true;
 }
 bool Renderer::ReloadShaders() {
     auto& r = *impl_;
     if (r.closed) throw std::logic_error("Renderer is shut down");
     auto previous = *r.shaderCache;
-    if (!r.shaderCache->ReloadIfChanged()) return false;
-    try { r.BuildPipelines(); }
-    catch (...) { *r.shaderCache = std::move(previous); throw; }
-    return true;
+    std::unique_ptr<ShaderCache> previousGeometry, previousLighting;
+    if (r.deferred) {
+        previousGeometry=std::make_unique<ShaderCache>(*r.geometryShaderCache);
+        previousLighting=std::make_unique<ShaderCache>(*r.deferredLightingShaderCache);
+    }
+    try {
+        bool changed=r.shaderCache->ReloadIfChanged();
+        if (r.deferred) {
+            changed=r.geometryShaderCache->ReloadIfChanged() || changed;
+            changed=r.deferredLightingShaderCache->ReloadIfChanged() || changed;
+        }
+        if (changed) r.BuildPipelines();
+        return changed;
+    } catch (...) {
+        *r.shaderCache=std::move(previous);
+        if (r.deferred) {
+            *r.geometryShaderCache=std::move(*previousGeometry);
+            *r.deferredLightingShaderCache=std::move(*previousLighting);
+        }
+        throw;
+    }
 }
 bool Renderer::ReplaceShaderSource(std::string source) {
     auto& r = *impl_;
@@ -360,6 +694,7 @@ bool Renderer::ReplaceShaderSource(std::string source) {
 void Renderer::BeginGpuProfile() {
     auto& r = *impl_;
     if (r.closed || r.gpuActive >= 0) throw std::logic_error("GPU profile already active or renderer closed");
+    r.drawCallCount=0;
     auto& set = r.gpuQueries[r.gpuNext];
     if (set.pending) return; // GPU is behind; skip a sample without blocking.
     r.gpuActive = static_cast<int>(r.gpuNext);
@@ -394,9 +729,12 @@ GpuTimings Renderer::PollGpuProfile() {
     }
     return r.lastGpuTimings;
 }
+unsigned Renderer::DrawCallCount() const noexcept { return impl_->drawCallCount; }
 FrameImage Renderer::Readback() {
     auto& r = *impl_;
     if (!r.activeFrame || r.shadowPass) throw std::logic_error("Readback requires color pass before Present");
+    if (r.deferredActive) throw std::logic_error("Resolve deferred lighting before readback");
+    if (r.bloom && !r.postResolved) ApplyPostProcess();
     auto readback = r.surface->Readback();
     return {readback.width,readback.height,std::move(readback.rgba)};
 }
@@ -439,8 +777,17 @@ ShutdownReport Renderer::ShutdownAndValidate() {
     if (r.diagnostics) Check(r.device.As(&debug), "Query shutdown debug interface");
     r.context->ClearState(); r.context->Flush();
     r.constants.reset();
+    r.postVertices.reset(); r.postIndices.reset(); r.sceneTarget.reset();
+    for (auto& item:r.gbufferRTVs) item.Reset();
+    for (auto& item:r.gbufferSRVs) item.Reset();
+    for (auto& item:r.gbufferTextures) item.Reset();
+    r.gbufferDepth.Reset(); r.gbufferDepthTexture.Reset();
     for (auto& pipeline : r.pipelines) pipeline.reset();
     r.shadowPipeline.reset();
+    r.solidPipeline.reset();
+    r.postPipeline.reset(); r.postShaderCache.reset();
+    r.geometryPipeline.reset(); r.deferredLightingPipeline.reset();
+    r.geometryShaderCache.reset(); r.deferredLightingShaderCache.reset();
     r.shaderCache.reset();
     r.shadowSampler.Reset(); r.shadowView.Reset(); r.shadowDepth.Reset(); r.shadowTexture.Reset();
     for (auto& set : r.gpuQueries) { set.disjoint.Reset(); set.start.Reset(); set.shadowEnd.Reset(); set.colorEnd.Reset(); }

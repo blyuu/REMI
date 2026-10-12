@@ -1,7 +1,7 @@
 """Bake a rigged Blender/glTF/FBX character into REMI's named-clip RMCH v2.
 
 Run with Blender 4.3+:
-  blender --background --python tools/bake_character.py -- \
+  blender --background --python tools/assets/bake_character.py -- \
     --source character.glb --clip idle=Idle --clip run=Run --output character.rmc
 
 Separate animation FBX files can use --animation idle=idle.fbx instead of

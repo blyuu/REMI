@@ -11,7 +11,7 @@ build\vs2022-x64\bin\Debug\REMIGravity.exe --character "C:\models\character.glb"
 
 ## 재질 파일
 
-glTF의 기본색 계수, metallic, roughness, 기본색 텍스처를 읽는다. 재질을 덮어쓸 때는 모델 파일 옆의 `materials/` 폴더에 `<모델파일명>_<glTF 재질 인덱스>.remimat`를 둔다. 예를 들어 `character.glb`의 재질 인덱스 2는 `materials/character_2.remimat`다. `baseColorTexture` 경로는 `.remimat` 파일 위치를 기준으로 해석한다.
+glTF의 기본색 계수, metallic, roughness, 기본색·노멀·발광·ORM 텍스처와 발광 계수를 읽는다. 노멀맵은 화면 미분으로 접선 축을 구성해 적용한다. ORM의 R(occlusion)·G(roughness)·B(metallic)를 PBR 픽셀 셰이더에서 직접 샘플한다. 재질을 덮어쓸 때는 모델 파일 옆의 `materials/` 폴더에 `<모델파일명>_<glTF 재질 인덱스>.remimat`를 둔다. 예를 들어 `character.glb`의 재질 인덱스 2는 `materials/character_2.remimat`다. `baseColorTexture` 경로는 `.remimat` 파일 위치를 기준으로 해석한다.
 
 ```json
 {
@@ -25,13 +25,15 @@ glTF의 기본색 계수, metallic, roughness, 기본색 텍스처를 읽는다.
 }
 ```
 
-`shadingModel`은 `Standard`, `Unlit`, `Toon` 중 하나다. 옆 파일이 없으면 glTF 재질을 사용한다. 옆 파일에 기본색 이미지 경로를 적으면 glTF 기본색 이미지 대신 사용한다. `LoadMaterial`과 `SaveMaterial` API로 같은 형식을 읽고 쓸 수 있다.
+`shadingModel`은 `Standard`, `Unlit`, `Toon`, `PBR` 중 하나다. 옆 파일이 없으면 glTF 재질을 PBR로 사용한다. 옆 파일에 기본색 이미지 경로를 적으면 glTF 기본색 이미지 대신 사용한다. `LoadMaterial`과 `SaveMaterial` API로 같은 형식을 읽고 쓸 수 있다.
+
+FBX는 실행 전에 Blender 5.1 기반 `tools/assets/import-fbx.ps1`로 GLB로 변환한다. 연결이 없는 TGA/PNG 등은 JSON 재질 맵으로 지정할 수 있다. Raven의 세 FBX/서로 다른 리그와 TGA 묶음에는 전용 `tools/assets/import-raven.ps1` 프리셋을 사용한다. 변환된 GLB만 런타임 glTF 로더에 전달하며, 엔진이 실행 중 FBX를 직접 파싱하지는 않는다. 자세한 실행 및 재질 연결은 [RavenRendering.md](RavenRendering.md)에 있다.
 
 ## 정적 장면과 본 애니메이션
 
 반복 배치에는 `StaticGltfCache(renderer, meshCache)`를 사용한다. `Instantiate(scene, path)`가 정규화한 경로별 모델을 한 번 로드하고 여러 Scene에 같은 GPU MeshHandle을 연결한다. Scene을 해제해도 모델은 유지하며 `Unload(path)`·`Clear()`·캐시 파괴 때 제거한다. Renderer와 meshCache가 StaticGltfCache보다 오래 살아야 한다.
 
-`StaticGltfCache(renderer, meshCache, &jobs)`처럼 `JobSystem`을 전달하면 glTF primitive별 정점 변환과 인덱스 순서 준비를 병렬 실행한다. 모든 CPU 작업의 완료와 예외를 확인한 뒤 D3D11 메시·텍스처 생성 및 캐시 변경을 호출 스레드에서 수행한다. Apocalypse 게임은 이 경로로 건물을 공유 배치하고, 여러 primitive의 Survival Character도 같은 작업 풀에서 준비한다. 풀은 `StaticGltfCache`보다 오래 살아야 한다.
+`StaticGltfCache(renderer, meshCache, &jobs)`처럼 `JobSystem`을 전달하면 glTF primitive별 정점 변환과 인덱스 순서 준비를 병렬 실행한다. 모든 CPU 작업의 완료와 예외를 확인한 뒤 D3D11 메시·텍스처 생성 및 캐시 변경을 호출 스레드에서 수행한다. Quarry 게임은 이 경로로 11개 재질 primitive의 지형 GLB를 불러오고, 여러 primitive의 Survival Character도 같은 작업 풀에서 준비한다. 풀은 `StaticGltfCache`보다 오래 살아야 한다.
 
 `Reload(path)`는 전체 파일·이미지·GPU 메시 준비에 성공하면 핸들을 유지한 채 교체한다. 기존 엔티티의 재질 값은 인스턴스별 설정으로 유지하고 새 인스턴스에는 갱신한 재질을 사용한다. 스킨 모델이나 primitive 수 변경은 거부하며, 이 경우 unload 후 다시 배치해야 한다. 같은 모델 로드에서 같은 이미지 인덱스/외부 경로를 쓰는 primitive들은 텍스처를 공유한다. 서로 다른 모델 파일 간 텍스처 전역 캐시는 아직 없다.
 
@@ -44,7 +46,7 @@ Sandbox의 `--static-gltf <파일>`이 이 경로를 사용하며 `F5`로 수동
 ## 현재 경계와 검증
 
 - glTF는 삼각형 primitive와 첫 번째 skin(최대 512개 joint)을 대상으로 한다. 다중 skin, morph target, GPU 스키닝, 메시 노드의 특수 bind 변환은 지원하지 않는다.
-- 기본색 이미지만 셰이더에 바인딩한다. normal/occlusion/metallic-roughness map, alpha blending/masking, 양면 재질, 정식 glTF PBR BRDF는 아직 적용하지 않는다. 따라서 복잡한 캐릭터는 상용 엔진과 같은 외관이 나오지 않는다.
+- 기본색·노멀·발광·ORM 이미지를 셰이더에 바인딩하고 GGX PBR을 지원한다. alpha masking은 지원하지만 alpha blending, 전용 hair/skin BRDF, 완전한 물리 기반 IBL은 아직 없다. 디퍼드 경로의 지오메트리 패스는 양면으로 그리지만 glTF의 개별 `doubleSided` 플래그에 따른 상태 분리는 아직 없다. 따라서 복잡한 캐릭터는 상용 엔진과 같은 외관이 나오지 않는다.
 - 리깅이나 축 방향이 다른 모델은 임포트 후 카메라·스케일·방향을 확인해야 한다. 주어진 Rover GLB는 런타임 로딩과 이동/중력 반전/WARP·하드웨어 종료 검사를 통과했지만, 원본 GLB에 기본색 이미지가 없어 별도 `.remimat`와 텍스처 지정이 필요하다.
 - 테스트의 작은 glTF/GLB fixture는 외부·내장 이미지, 재질 파일 덮어쓰기, 스키닝 후 화면 픽셀 변화, 정적 Scene 임포트, 공유·재로드 실패 복구, D3D 경고·잔존 객체를 검사한다. 16 primitive fixture는 순차/병렬 임포트의 렌더 픽셀 일치를 검사한다. Quinn 에셋이 없으면 해당 조건부 테스트 하나가 빠진다.
 

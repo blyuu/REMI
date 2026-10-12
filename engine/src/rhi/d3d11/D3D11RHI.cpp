@@ -372,7 +372,7 @@ std::unique_ptr<IRHIPipeline> D3D11Device::CreatePipeline(const PipelineDesc& de
     if (inputs.empty()) throw std::invalid_argument("Vertex shader has no mapped inputs");
     Check(device_->CreateInputLayout(inputs.data(), static_cast<UINT>(inputs.size()),
         desc.vertexShader.data(), desc.vertexShader.size(), &pipeline->layout), "Create RHI input layout");
-    D3D11_RASTERIZER_DESC raster{}; raster.FillMode = D3D11_FILL_SOLID;
+    D3D11_RASTERIZER_DESC raster{}; raster.FillMode = desc.wireframe ? D3D11_FILL_WIREFRAME : D3D11_FILL_SOLID;
     raster.CullMode = desc.cullBack ? D3D11_CULL_BACK : D3D11_CULL_NONE; raster.DepthClipEnable = TRUE;
     raster.DepthBias = desc.depthBias; raster.SlopeScaledDepthBias = desc.slopeScaledDepthBias;
     raster.DepthBiasClamp = desc.depthBias ? .01f : 0;

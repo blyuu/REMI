@@ -17,14 +17,14 @@ ResourceCache<Mesh>& SceneRenderSession::Meshes() {
 }
 
 SceneDrawStats SceneRenderSession::DrawShadow(const Scene& scene, const Matrix4& lightViewProjection,
-    const ExtraDraw& extra) {
+    const ExtraDraw& extra, bool cull) {
     auto& renderer = Device();
     auto& meshes = Meshes();
     renderer.BeginShadow(lightViewProjection);
     SceneDrawStats stats;
     try {
         stats = DrawScene(renderer,scene,lightViewProjection,
-            [&](MeshHandle handle) { return meshes.Get(handle); });
+            [&](MeshHandle handle) { return meshes.Get(handle); },nullptr,cull);
         if (extra) extra(renderer);
     } catch (...) {
         renderer.EndShadow();
@@ -36,12 +36,13 @@ SceneDrawStats SceneRenderSession::DrawShadow(const Scene& scene, const Matrix4&
 }
 
 SceneDrawStats SceneRenderSession::DrawColor(const Scene& scene, const Matrix4& viewProjection,
-    const DirectionalLight& light, const ExtraDraw& extra) {
+    const DirectionalLight& light, const ExtraDraw& extra, bool cull) {
     auto& renderer = Device();
     auto& meshes = Meshes();
     const auto stats = DrawScene(renderer,scene,viewProjection,
-        [&](MeshHandle handle) { return meshes.Get(handle); },&light);
+        [&](MeshHandle handle) { return meshes.Get(handle); },&light,cull);
     if (extra) extra(renderer);
+    renderer.ResolveDeferred(light);
     if (stats.missing) throw std::runtime_error("Color pass has unresolved scene meshes");
     return stats;
 }

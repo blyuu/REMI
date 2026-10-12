@@ -56,6 +56,7 @@ struct PipelineDesc {
     std::vector<InputElement> inputs;
     bool depthTest = true;
     bool cullBack = true;
+    bool wireframe = false;
     int depthBias = 0;
     float slopeScaledDepthBias = 0;
 };

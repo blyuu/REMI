@@ -1,5 +1,6 @@
 # Build output
 /build/
+/demoexecutionfiles/
 /out/
 
 # Visual Studio / IDE
@@ -37,8 +38,10 @@ desktop.ini
 !/docs/ShaderImplementation.md
 !/docs/MemoryManagement.md
 !/docs/AssetPipeline.md
-!/docs/REMI_Engine_Complete_Guide.md
 !/docs/PerformanceEvidence.md
+!/docs/PortfolioBenchmarks.md
+!/docs/RavenRendering.md
+!/docs/MazeEscape.md
 !/docs/benchmarks/
 !/docs/benchmarks/**
 /documentation/
@@ -53,3 +56,15 @@ desktop.ini
 /Mountain_Surrounded_Village_Environment-62667742/
 /FREE_Post_Apocalypse_Survivor_Environment_Kitbash_set-93d57f55/
 /Survival_Character-11d20d01/
+/African_Slate_Quarry-578d0ceb/
+/Environment Assets/
+/Models/Stellar Blade - Raven.zip
+__pycache__/
+
+# Soul: City license verification pending; keep the local UE export workflow private.
+/Play-SoulCity.cmd
+/tools/assets/export-soul-city.ps1
+/tools/assets/export_soul_city.py
+/tools/assets/export-soul-lights.ps1
+/tools/assets/inspect_soul_lights.py
+/media/soulcity-preview.png

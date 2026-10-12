@@ -37,6 +37,7 @@ add_subdirectory(apps/sandbox)
 add_subdirectory(games/gravity)
 add_subdirectory(games/relay)
 add_subdirectory(games/village)
+add_subdirectory(games/maze)
 add_subdirectory(tools/benchmarks)
 set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT REMIGravity)
 
@@ -48,7 +49,7 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS REMIGravity REMIRelay REMISandbox RUNTIME DESTINATION .)
-install(FILES shaders/Basic.hlsl DESTINATION shaders)
+install(FILES shaders/Basic.hlsl shaders/PostProcess.hlsl shaders/DeferredGeometry.hlsl shaders/DeferredLighting.hlsl DESTINATION shaders)
 install(FILES games/gravity/gravity.project.json DESTINATION .)
 install(FILES assets/fonts/Pretendard-SemiBold.otf assets/fonts/LICENSE.txt
     assets/fonts/NotoSansKR-VF.ttf assets/fonts/NotoSansKR-OFL.txt DESTINATION assets/fonts)

@@ -6,5 +6,8 @@ set_target_properties(REMISandbox PROPERTIES
     FOLDER "Apps")
 add_custom_target(remi_sandbox_shaders ALL
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:REMISandbox>/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/shaders/Basic.hlsl" "$<TARGET_FILE_DIR:REMISandbox>/shaders/Basic.hlsl")
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/shaders/Basic.hlsl" "$<TARGET_FILE_DIR:REMISandbox>/shaders/Basic.hlsl"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/shaders/PostProcess.hlsl" "$<TARGET_FILE_DIR:REMISandbox>/shaders/PostProcess.hlsl"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/shaders/DeferredGeometry.hlsl" "$<TARGET_FILE_DIR:REMISandbox>/shaders/DeferredGeometry.hlsl"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/shaders/DeferredLighting.hlsl" "$<TARGET_FILE_DIR:REMISandbox>/shaders/DeferredLighting.hlsl")
 add_dependencies(REMISandbox remi_sandbox_shaders)

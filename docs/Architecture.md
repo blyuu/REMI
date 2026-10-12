@@ -33,9 +33,9 @@ flowchart TD
 | Scene | EntityId, Transform 계층, MeshComponent | `engine/src/scene/Scene.cpp` |
 | Resources | 파일 로드와 타입별 캐시 | `engine/src/resources/ResourceManager.cpp`, `ResourceCache.hpp` |
 | Physics | Scene 기반 AABB 동역학·접촉, 중력 반전 명령, 코드 기반 박스/시각 자식 생성 | `engine/src/physics/PhysicsWorld.cpp`, `GravityControl.cpp`, `SceneBuilder.cpp` |
-| Renderer | 색상·그림자 패스, 텍스처 연결, GPU 계측과 게임용 패스 조립 | `engine/src/render/Renderer.cpp`, `SceneRenderSession.cpp` |
+| Renderer | 포워드·디퍼드 색상/조명 패스, 그림자, 선택적 bloom, 재질 노드 그래프와 노드 GC, GPU 계측 | `engine/src/render/Renderer.cpp`, `MaterialGraph.cpp`, `SceneRenderSession.cpp` |
 | RHI | 장치·버퍼·텍스처·파이프라인·렌더 명령·오프스크린 타깃 인터페이스와 D3D11 구현 | `engine/include/remi/rhi/`, `engine/src/rhi/` |
-| Assets | 런타임 glTF/GLB·PNG/JPEG·재질 파일, CPU 본 스키닝·상태 머신 | `engine/src/assets/`, `engine/src/animation/` |
+| Assets | 오프라인 Blender FBX→GLB 변환, 런타임 glTF/GLB·PNG/JPEG·재질 파일, CPU 본 스키닝·상태 머신 | `tools/assets/import_fbx.py`, `engine/src/assets/`, `engine/src/animation/` |
 | DebugUI | 성능 오버레이 메시 | `engine/src/debug/DebugOverlay.cpp` |
 
 `REMIGravity`는 `GravityLayer`를 `Application`에 등록해 엔진 루프와 게임 코드를 분리한다. 일반 Layer가 먼저, Overlay가 나중에 갱신되며 종료 시 역순으로 detach한다. `PhysicsWorld`는 물체·중력·접촉만 다루고, 엔진의 `TryReverseGravity`는 지지 접촉 조건에 따라 월드 중력을 뒤집으며 해당 물체의 중력축 속도만 제거한다. 코인 수집·승패 판정은 물리·Scene을 참조하지 않는 `GravityRules`가 맡고, `GravityGame`은 입력·물리·규칙·시각 표현을 연결한다. 재질 프리셋은 게임 코드에 남긴다. 입력은 아직 폴링 방식이므로 Hazel의 역순 이벤트 전파까지 구현한 것은 아니다.
@@ -54,7 +54,11 @@ flowchart TD
 
 비교 기준: [Hazel Application](https://github.com/TheCherno/Hazel/blob/master/Hazel/src/Hazel/Core/Application.cpp), [LayerStack](https://github.com/TheCherno/Hazel/blob/master/Hazel/src/Hazel/Core/LayerStack.cpp), [RendererAPI](https://github.com/TheCherno/Hazel/blob/master/Hazel/src/Hazel/Renderer/RendererAPI.h). 공개 저장소의 RendererAPI는 OpenGL을 열거하며 DirectX 11 구현을 제공하지 않는다.
 
-`RHIFactory`가 D3D11/WARP 장치를 만들고, `IRHIDevice`가 버퍼·텍스처·파이프라인·오프스크린 타깃과 창 표면을 생성한다. `IRHIContext`가 파이프라인과 리소스 바인딩, 인덱스 드로, 오프스크린 패스를 담당한다. `IRHISurface`가 swap chain·기본 색/깊이 타깃·resize·present·스크린샷 읽기를 소유한다. Shadow map 생성, GPU 질의·진단은 아직 `Renderer`의 D3D11 코드다. 다른 그래픽 API를 지원하려면 이 남은 부분도 분리해야 한다.
+`RHIFactory`가 D3D11/WARP 장치를 만들고, `IRHIDevice`가 버퍼·텍스처·파이프라인·오프스크린 타깃과 창 표면을 생성한다. `IRHIContext`가 파이프라인과 리소스 바인딩, 인덱스 드로, 오프스크린 패스를 담당한다. `IRHISurface`가 swap chain·기본 색/깊이 타깃·resize·present·스크린샷 읽기를 소유한다. Shadow map·디퍼드 G-buffer 생성, GPU 질의·진단은 아직 `Renderer`의 D3D11 코드다. 다른 그래픽 API를 지원하려면 이 남은 부분도 분리해야 한다.
+
+`RendererConfig::bloom`을 켜면 장면을 오프스크린 색/깊이 타깃에 그린 뒤 `PostProcess.hlsl`에서 채도가 있는 밝은 픽셀을 주변으로 확산하고 swap chain에 합성한다. `ApplyPostProcess()` 이후 그리는 설정 UI는 이 효과를 받지 않는다. 톤 매핑·하늘/지면 환경광·거리 안개와 최대 8개의 점광원은 `DirectionalLight`가 선택적으로 전달한다. 이는 Soul City 로컬 프로토타입의 야간 조명을 근사하는 경로이며 Unreal의 Lumen, 광원 그림자, 물리 기반 IBL을 구현한 것은 아니다.
+
+`RendererConfig::deferred`는 장면을 네 개의 G-buffer 타깃에 그리고 `ResolveDeferred(light)`에서 조명을 한 번 계산한다. UI는 이후 포워드 경로로 그린다. 현재 디퍼드 경로는 모든 장면 재질을 metallic-roughness PBR로 평가하므로 포워드의 Standard/Toon 외형과 같지 않다. Raven 모델은 디퍼드가 기본이며 `--forward` 비교 옵션을 제공한다. 패스 순서와 현재 한계는 [RavenRendering.md](RavenRendering.md)에 있다.
 
 ## 빌드와 실행 경로
 
@@ -86,7 +90,7 @@ Win32 메시지/입력 → Application/Layer OnFixedUpdate(0~8회) → Applicati
 
 `JobSystem`은 고정 수의 CPU 워커(기본값: `hardware_concurrency - 1`, 최대 8개), 작업 큐, `Submit`의 `future`, 범위별 `ParallelFor`를 제공한다. 작업 중 발생한 예외는 호출자가 `future::get`으로 받는다. `ParallelFor`는 어떤 범위에서 실패해도 제출한 나머지 범위가 끝날 때까지 기다린 뒤 예외를 다시 던진다. 풀 소멸자는 큐에 남은 작업까지 수행하고 모든 워커를 합친다. 워커가 같은 풀의 다른 작업을 기다리는 중첩 사용은 지원하지 않는다.
 
-Apocalypse 프로토타입의 `StaticGltfCache`와 Survival Character 로더는 이 풀을 `GltfAsset::Load`에 전달한다. glTF 파싱과 재질 읽기 이후, primitive별 정점 좌표계 변환·삼각형 winding 변경을 서로 다른 워커/호출 스레드가 수행한다. `ParallelFor`가 완료된 후 메인 스레드에서 D3D11 Mesh·Texture를 만들고 Scene/ResourceCache를 바꾼다. 따라서 Renderer·Scene·ResourceCache의 동시 접근은 허용하지 않는다. 한 primitive인 공유 건물은 순차 준비 경로를 사용하고, 여러 primitive로 구성된 캐릭터가 병렬 준비 경로를 사용한다. 다른 호출자는 풀을 전달하지 않으면 기존 순차 경로를 사용한다.
+Quarry 프로토타입의 `StaticGltfCache`와 Survival Character 로더는 이 풀을 `GltfAsset::Load`에 전달한다. glTF 파싱과 재질 읽기 이후, primitive별 정점 좌표계 변환·삼각형 winding 변경을 서로 다른 워커/호출 스레드가 수행한다. `ParallelFor`가 완료된 후 메인 스레드에서 D3D11 Mesh·Texture를 만들고 Scene/ResourceCache를 바꾼다. 따라서 Renderer·Scene·ResourceCache의 동시 접근은 허용하지 않는다. Quarry GLB는 11개 텍스처 재질 primitive로 구성되며 캐릭터도 여러 primitive이므로 병렬 준비 경로를 사용할 수 있다. 다른 호출자는 풀을 전달하지 않으면 기존 순차 경로를 사용한다.
 
 ```text
 메인: glTF 읽기 → [CPU primitive 준비 작업 분배·대기] → D3D11 업로드 → Scene/캐시 반영
@@ -112,7 +116,7 @@ Sandbox는 `StaticGltfCache`로 정적 모델의 경로별 공유와 재로드�
 RMCH 베이크가 필요한 경우 Blender 5.1에서 action을 변환한다. 별도 FBX 동작 파일은 `--clip` 대신 `--animation idle=idle.fbx --animation run=run.fbx`를 사용한다. `--mesh <오브젝트명>`으로 LOD를 선택하고 `--texture <재질 슬롯 또는 이름>=<이미지 파일>`로 diffuse 색을 정점에 베이크할 수 있다. glTF 경로는 자체 테스트용 `.gltf`/`.glb`와 로컬 Rover GLB로 실행을 검증했다. 다른 모델의 축·크기·재질은 개별 확인이 필요하다.
 
 ```powershell
-blender --background --python tools/bake_character.py -- --source character.glb --clip idle=Idle --clip run=Run --output character.rmc
+blender --background --python tools/assets/bake_character.py -- --source character.glb --clip idle=Idle --clip run=Run --output character.rmc
 build\vs2022-x64\bin\Debug\REMIGravity.exe --character character.rmc
 ```
 

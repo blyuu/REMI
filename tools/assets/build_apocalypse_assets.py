@@ -14,7 +14,7 @@ from pathlib import Path
 import bpy
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "FREE_Post_Apocalypse_Survivor_Environment_Kitbash_set-93d57f55" / "fbx" / "Post_apocalypse_kitbash_free"
 SURVIVOR = ROOT / "Survival_Character-11d20d01" / "fbx" / "survival_character.fbx"
 

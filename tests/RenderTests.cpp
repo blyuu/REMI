@@ -183,6 +183,31 @@ int wmain(int argc, wchar_t** argv) {
             try { (void)session.Device(); } catch (const std::logic_error&) { rejected = true; }
             Check(rejected,"Shut-down render session exposed a stale Renderer");
         }
+        {
+            remi::Window another(wc);
+            auto postConfig = config; postConfig.nativeWindow = another.NativeHandle(); postConfig.bloom = true;
+            remi::Renderer post(postConfig);
+            auto red = Quad(post,.5f,{1,0,0});
+            auto green = Quad(post,.5f,{0,1,0});
+            post.BeginFrame({0,0,0});
+            post.Draw(*red,remi::ModelMatrix({0,0,0},0,{.15f,.15f,1}));
+            post.ApplyPostProcess();
+            post.Draw(*green,remi::ModelMatrix({.75f,0,0},0,{.1f,.1f,1}));
+            const auto postFrame = post.Readback(); post.Present();
+            const auto glow = (static_cast<std::size_t>(48)*128+78)*4;
+            const auto overlay = (static_cast<std::size_t>(48)*128+112)*4;
+            Check(postFrame.rgba[glow] > 0,"Bloom did not reach neighboring pixels");
+            Check(postFrame.rgba[overlay+1] > 200 && postFrame.rgba[overlay] < 20,
+                "UI overlay was changed by scene post processing");
+            post.Resize(96,64);
+            post.BeginFrame({0,0,0});
+            post.Draw(*red,remi::ModelMatrix({0,0,0},0,{.15f,.15f,1}));
+            Check(post.Readback().width == 96,"Post process target did not resize");
+            post.Present();
+            red.reset(); green.reset();
+            const auto report = post.ShutdownAndValidate();
+            Check(report.liveChildren == 0 && report.priorWarnings == 0,"Post process retained D3D objects");
+        }
         Check(renderer.CheckDiagnostics() == 0, "D3D11 debug warning/error detected");
         std::cout << "GPU readback: depth/order, resize, viewport, sRGB and camera passed. Debug layer: "
                   << (renderer.DebugLayerEnabled() ? "enabled" : "unavailable; validation not performed") << '\n';

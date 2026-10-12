@@ -37,6 +37,8 @@ struct Material
     float roughness = 1.0f;
     int   baseColorImage         = -1;
     int   normalImage            = -1;
+    int   emissiveImage          = -1;
+    DirectX::XMFLOAT3 emissiveFactor { 0, 0, 0 };
     int occlusionImage = -1;
     float occlusionStrength = 1;
     int   metallicRoughnessImage = -1;

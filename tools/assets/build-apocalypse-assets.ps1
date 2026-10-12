@@ -2,7 +2,7 @@ param(
     [string]$Blender = ''
 )
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $kit = Join-Path $repoRoot 'FREE_Post_Apocalypse_Survivor_Environment_Kitbash_set-93d57f55\fbx\Post_apocalypse_kitbash_free\Fbx\12.fbx'
 $survivor = Join-Path $repoRoot 'Survival_Character-11d20d01\fbx\survival_character.fbx'
 foreach ($source in @($kit, $survivor)) {

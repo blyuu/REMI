@@ -4,9 +4,9 @@
 
 ## 초기화와 데이터
 
-RHI의 D3D11 구현이 디바이스·즉시 컨텍스트를 만들고, `IRHISurface`의 D3D11 구현이 flip-discard swap chain, sRGB render-target view, depth/stencil buffer를 생성한다. `ShaderCache`가 HLSL의 `VSMain`과 Standard/Unlit/Toon `PSMain`을 컴파일한다. RHI 파이프라인이 입력 레이아웃·VS/PS·래스터·깊이 상태를 소유한다. Vertex는 위치·정점 색·노멀(float3)과 UV(float2)를 갖는다. Static mesh는 immutable vertex/index buffer, 애니메이션 mesh는 RHI가 `Map(WRITE_DISCARD)`으로 갱신하는 dynamic vertex buffer를 사용한다.
+RHI의 D3D11 구현이 디바이스·즉시 컨텍스트를 만들고, `IRHISurface`의 D3D11 구현이 flip-discard swap chain, sRGB render-target view, depth/stencil buffer를 생성한다. `ShaderCache`가 포워드 Standard/Unlit/Toon/PBR 및 디퍼드 지오메트리/조명 셰이더를 컴파일한다. RHI 파이프라인이 입력 레이아웃·VS/PS·래스터·깊이 상태를 소유한다. Vertex는 위치·정점 색·노멀(float3)과 UV(float2)를 갖는다. Static mesh는 immutable vertex/index buffer, 애니메이션 mesh는 RHI가 `Map(WRITE_DISCARD)`으로 갱신하는 dynamic vertex buffer를 사용한다.
 
-`IRHIDevice`는 버퍼·텍스처·파이프라인·오프스크린 타깃·창 표면을 만들고 `IRHIContext`는 바인딩과 draw를 수행한다. 오프스크린 타깃은 진단용 RGBA 읽기도 지원한다. `IRHISurface`가 기본 swap chain의 resize·clear·present·읽기를 맡는다. Shadow map 생성·GPU 계측·진단은 아직 `Renderer`의 D3D11 코드다. `ShaderCache`는 원본 파일 내용이 바뀌면 기존 VS/PS 조합을 먼저 다시 컴파일한다. `Renderer::ReloadShaders`가 새 RHI 파이프라인과 입력 레이아웃을 만들어 성공 시 교체한다. 입력 레이아웃은 컴파일된 VS 서명을 반사해 현재 Vertex의 POSITION/COLOR/NORMAL/TEXCOORD 매핑에서 필요한 항목을 선택한다. 새 의미 체계를 쓰려면 Vertex 구조와 매핑도 추가해야 한다. 게임은 파일을 1초마다 확인하며 `F5`로도 요청할 수 있다. 잘못된 HLSL 편집은 이전 파이프라인을 유지한다. 명시적 소스 교체는 `ReplaceShaderSource`를 사용한다. 소스 문자열 모드에서 `#include`는 지원하지 않으며, 파일 감시는 현재 주 HLSL 파일을 대상으로 한다.
+`IRHIDevice`는 버퍼·텍스처·파이프라인·오프스크린 타깃·창 표면을 만들고 `IRHIContext`는 바인딩과 draw를 수행한다. 오프스크린 타깃은 진단용 RGBA 읽기도 지원한다. `IRHISurface`가 기본 swap chain의 resize·clear·present·읽기를 맡는다. Shadow map·디퍼드 G-buffer 생성, GPU 계측·진단은 아직 `Renderer`의 D3D11 코드다. `ShaderCache`는 원본 파일 내용이 바뀌면 기존 VS/PS 조합을 먼저 다시 컴파일한다. `Renderer::ReloadShaders`가 Basic과 사용 중인 디퍼드 셰이더의 새 RHI 파이프라인을 만들어 성공 시 교체한다. 입력 레이아웃은 컴파일된 VS 서명을 반사해 현재 Vertex의 POSITION/COLOR/NORMAL/TEXCOORD 매핑에서 필요한 항목을 선택한다. 게임은 파일을 1초마다 확인하며 `F5`로도 요청할 수 있다. 잘못된 HLSL 편집은 이전 파이프라인을 유지한다. 명시적 소스 교체는 `ReplaceShaderSource`를 사용한다. 소스 문자열 모드에서 `#include`는 지원하지 않는다.
 
 이 분리로 생긴 CPU 오버헤드와 셰이딩 모델별 GPU 비용은 아직 동일 조건에서 다시 측정하지 않았다. 과거 Phase 10 성능 수치를 이 변경의 결과로 인용하지 않는다.
 
@@ -15,8 +15,12 @@ flowchart LR
     Scene[Scene + MeshHandle] --> Resolve[Mesh resolver]
     Resolve --> Cull[클립 공간 컬링]
     Cull --> Shadow[방향광 shadow depth]
-    Shadow --> Color[색상 패스 / Basic.hlsl]
-    Color --> UI[HUD + Debug UI]
+    Shadow --> Route{렌더 경로}
+    Route --> Forward[포워드 / Basic.hlsl]
+    Route --> GBuffer[디퍼드 G-buffer / DeferredGeometry.hlsl]
+    GBuffer --> Lighting[전체 화면 조명 / DeferredLighting.hlsl]
+    Forward --> UI[후처리 + HUD + Debug UI]
+    Lighting --> UI
     UI --> Present[Swap chain Present]
 ```
 
@@ -36,9 +40,9 @@ Color pass는 광원 클립 좌표를 UV로 변환하고 `SampleCmpLevelZero`를
 
 ## 색상 패스와 화면 표시
 
-`BeginFrame`은 sRGB render target과 depth buffer를 바인딩·초기화한다. `DrawLitPrepared`가 객체별 월드/MVP/광원/재질 값을 constant buffer에 기록한다. RHI 명령 컨텍스트가 파이프라인·버퍼·기본색 텍스처를 바인딩하고 그린다. HLSL은 정점 색에 선택적인 sRGB 기본색 텍스처를 곱한 뒤 방향광 확산광, ambient, 간이 sky fill, 하이라이트, 그림자 가시도를 조합한다. 노멀 없는 도형은 화면 미분으로 face normal을 계산한다. 자세한 수식과 제약은 [ShaderImplementation.md](ShaderImplementation.md)에 있다.
+포워드 `BeginFrame`은 sRGB render target과 depth buffer를 바인딩·초기화한다. 디퍼드에서는 네 개의 RGBA16F G-buffer와 depth를 초기화한다. `DrawLitPrepared`가 객체별 월드/MVP/광원/재질 값을 constant buffer에 기록한다. 기본색·노멀·ORM·발광 텍스처를 바인딩하며, 포워드 PBR은 여기서 GGX 조명을 계산한다. 디퍼드는 기본색/AO, 노멀/roughness, 월드 위치/metallic, 발광/점유를 저장한 후 `ResolveDeferred`에서 한 번 조명한다. 노멀 없는 도형은 화면 미분으로 face normal을 계산한다. 자세한 수식과 제약은 [ShaderImplementation.md](ShaderImplementation.md)와 [RavenRendering.md](RavenRendering.md)에 있다.
 
-게임은 색상 장면 뒤에 Pretendard HUD와 디버그 UI를 그린 뒤 `Present`한다. HUD는 독립적인 UI 프레임워크가 아니라 현재 renderer의 메시 경로를 이용한다. Backbuffer 읽기는 스크린샷·진단 시에만 실행하며 일반 프레임 경로에서는 수행하지 않는다.
+게임은 색상 장면 뒤에 게임별 HUD와 디버그 UI를 그린 뒤 `Present`한다. Gravity의 게임 HUD는 Pretendard를 사용하고, 설정·안내 패널은 Noto Sans KR을 사용한다. HUD는 독립적인 UI 프레임워크가 아니라 현재 renderer의 메시 경로를 이용한다. Backbuffer 읽기는 스크린샷·진단 시에만 실행하며 일반 프레임 경로에서는 수행하지 않는다.
 
 ## 계측과 검증
 
@@ -46,4 +50,4 @@ Color pass는 광원 클립 좌표를 UV로 변환하고 `SampleCmpLevelZero`를
 
 CPU profiler는 physics/shadow/color/present 구간을 측정한다. GPU는 timestamp/disjoint query 네 세트를 순환하며, 결과가 준비되지 않으면 기다리지 않고 샘플을 건너뛴다. `REMIGravity --profile-csv <파일> --profile-frames <N>`으로 프레임별 CSV를 만들 수 있다. 비교 시 해상도, 하드웨어/WARP, VSync, 빌드 설정과 같은 조건을 고정해야 한다. GPU 결과의 `gpu_valid`를 확인한 뒤 유효한 샘플만 집계한다.
 
-현재 렌더러는 하나의 forward color pass와 하나의 shadow pass를 사용한다. RHI 오프스크린 타깃은 별도로 생성·샘플링 가능하지만 기본 게임의 패스 그래프에는 아직 연결하지 않았다. 기본색 외의 normal/metallic-roughness 텍스처, IBL, PBR BRDF, HDR tone mapping, transparency sorting, TAA와 콘솔 백엔드는 구현되지 않았다.
+현재 포워드/디퍼드 선택은 장면 단위다. Raven 데모의 `F6`은 프레임 사이에 두 경로를 바꾸며, `F4`는 장면 지오메트리만 wireframe으로 표시한다. 디퍼드 경로는 모든 장면 재질을 PBR로 평가하고 후속 HUD/UI만 포워드로 그린다. 별도 투명 물체 정렬 패스, 조사된 IBL, TAA와 콘솔 백엔드는 없다. 디퍼드의 메모리·대역폭 비용과 포워드 대비 GPU 시간은 하드웨어별로 별도 측정해야 한다. 실제 GPU 측정 방법은 [PortfolioBenchmarks](PortfolioBenchmarks.md)에 있다.

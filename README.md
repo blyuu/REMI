@@ -1,111 +1,135 @@
-[한국어](README.md) · [日本語](README.ja.md) · [简体中文](README.zh.md)
-
 # REMI Engine
 
-**C++20 · DirectX 11 · HLSL · Windows x64**
+**C++20 · Direct3D 11 · HLSL · Win32 · Windows x64**  
+현재 버전: **0.11.0**
 
-REMI는 렌더링, 장면, 리소스, 물리, 수명 관리를 직접 구현하며 확장하는 소형 게임 엔진입니다. `REMIGravity`는 중력 반전 퍼즐, `REMIRelay`는 스위치와 제한 시간이 있는 별도 게임입니다. `REMIVillage` 실행 파일은 현재 로컬 포스트아포칼립스 맵과 Survival Character를 사용하는 3인칭 탐험 프로토타입입니다.
+REMI는 렌더링, 장면, 리소스 수명, 물리, 작업 분배를 직접 구현한 3D 게임 엔진입니다. Maze Escape는 엔진을 사용하는 3인칭 게임이고, Raven은 Forward/Deferred PBR과 진단 기능을 같은 장면에서 비교하는 기술 데모입니다. Gravity와 Relay는 공통 Scene·Physics·Renderer를 재사용하는 별도 게임입니다.
 
-![REMI Gravity Run 플레이 데모](media/gravity-run-demo.gif)
+## 먼저 보기
 
-## 주요 기능
-
-| 분야 | 현재 구현 |
+| 항목 | 확인할 내용 |
 | --- | --- |
-| 렌더링 | D3D11 RHI 버퍼·텍스처·파이프라인·명령·오프스크린 타깃, 변경 감지 ShaderCache, Standard/Unlit/Toon 셰이딩, 방향광, 2048² shadow map과 3×3 PCF, static mesh 프러스텀 컬링 |
-| 장면·리소스 | 계층 Transform, 세대 검증 EntityId, 선형 시간 서브트리 삭제, 핸들 기반 Mesh/파일 캐시와 실패 복구 reload |
-| 에셋·캐릭터 | 런타임 glTF/GLB 메시·기본색 텍스처·재질 임포트, `.remimat` 재질 파일, CPU 본 스키닝·클립 전환 상태 머신, 기존 RMCH 베이크 애니메이션 |
-| 멀티스레딩 | 종료 시 대기 중인 작업을 마치는 CPU Job System; Apocalypse 건물·캐릭터 glTF의 primitive별 정점·인덱스 준비를 워커에 분배하고 D3D11 업로드는 메인 스레드에서 수행 |
-| 게임·진단 | AABB 물리, Gravity/Relay 게임과 로컬 Apocalypse 프로토타입, Noto Sans KR 설정 UI, Sandbox 위치 Inspector, CPU/GPU CSV와 재현 벤치마크, D3D debug layer 검사 |
+| [Maze Escape](docs/MazeEscape.md) | Ancient Ruins 조각으로 구성한 13×13 미로, Quinn 마네킹, 충돌·카메라·게임 UI |
+| [Raven Rendering](docs/RavenRendering.md) | Soul City + Raven, 재질 입력, PBR 패스, Forward/Deferred 전환과 한계 |
+| [Engine Architecture](docs/Architecture.md) | 모듈 의존성, 프레임 루프, RHI와 D3D11 경계 |
+| [Rendering Pipeline](docs/RenderingPipeline.md) | 그림자·G-buffer·조명·후처리 순서와 GPU 계측 범위 |
+| [Resource & Memory](docs/MemoryManagement.md) | 소유권, 세대 번호 핸들, 캐시·재로드·실패 복구 |
+| [GPU 실측](docs/benchmarks/RavenHardware-2026-10-11.md) · [Job System 실측](docs/benchmarks/JobSystemHardware-2026-10-11.md) | 측정 환경, 원시 CSV, 결과와 한계 |
 
-현재 셰이더의 `metallic`·`roughness`는 **간이 조명 모델의 조정값**입니다. RHI가 리소스·드로 명령과 swap chain 표면을 담당하며, 기본 그림자 타깃·GPU 진단은 아직 D3D11 전용입니다. glTF 본 스키닝은 CPU에서 계산하며 PBR·IBL·GPU 스키닝·콘솔 지원은 아직 없습니다.
+## 구현 범위
 
-## 측정으로 확인한 개선
-
-2026-10-05, i9-14900HX·Release 기준. 렌더링 값은 **64×64·D3D11 WARP·debug layer ON·VSync OFF** 진단 장면이다.
-
-| 사례 | 비교 결과 |
+| 시스템 | 현재 구현 |
 | --- | --- |
-| 1,000개 엔티티 컬링 OFF → ON | draw 1,000 → 20, CPU 제출 중앙값 10.6082 → 0.3475 ms, WARP GPU color 12.1184 → 0.1264 ms; 동일 픽셀 |
-| 984바이트 파일 재로드 → 캐시 적중 | 중앙값 0.0999 → 0.0344 ms; OS 파일 캐시는 예열된 상태 |
-| 5,001개 계층 삭제 | 이전 슬롯 검색 23.5416 → 자식 연결 순회 0.0691 ms; 이전 커밋과 동일 프로그램으로 비교 |
+| Render / RHI | D3D11 자원·명령 추상화, Forward 및 Deferred PBR, 4개 G-buffer, 방향광·점광원, 2048² 그림자 맵과 3×3 PCF, Bloom·톤 매핑, 정적 Scene 프러스텀 컬링 |
+| Material / Asset | glTF/GLB 메시와 Base Color·Normal·ORM·Emissive 텍스처, 오프라인 FBX→GLB 변환, `.remimat`, CPU MaterialGraph와 노드 GC |
+| Scene / Lifetime | 계층 Transform, 세대 번호 EntityId, MeshHandle 공유, 파일·메시·텍스처 캐시, 실패 시 기존 리소스를 유지하는 재로드 |
+| Runtime / Jobs | Win32 입력, 고정 시간 물리 업데이트, AABB 충돌, 최대 8개 워커의 Job System으로 glTF primitive별 CPU 준비 처리 |
+| Debug / Validation | Scene Inspector, 성능 오버레이, 컬링·와이어프레임·렌더 경로 전환, CPU/GPU CSV, 회귀 테스트 |
 
-[측정 조건·재현 명령·원시 CSV·설계 이유](docs/PerformanceEvidence.md)에 범위와 한계를 기록했다. 이 값은 하드웨어 GPU의 게임 FPS를 뜻하지 않는다.
+게임은 `Application`과 `Layer`를 사용해 공통 런타임을 조립합니다. `SceneRenderSession`이 그림자·색상·후처리 호출을 묶고 `Renderer`가 `IRHI*` 인터페이스로 D3D11 명령을 제출합니다. GPU 업로드와 드로 제출은 메인 스레드에서 수행합니다. glTF CPU 준비 작업만 워커에 분배합니다.
 
-## 실행
-
-Windows 10/11 x64, Visual Studio 2022의 C++ 데스크톱 도구와 Windows SDK, CMake 3.25 이상이 필요합니다.
-
-### 실행 ZIP과 소스 ZIP 만들기
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\package\build-release.ps1
+```text
+Maze / Raven / Gravity / Relay
+            ↓
+Application · Input · Scene · Physics
+            ↓
+Resources · glTF Preparation · Job System
+            ↓
+SceneRenderSession · Renderer · RHI
+            ↓
+Direct3D 11 · Win32
 ```
 
-스크립트는 현재 작업 트리의 소스 스냅샷을 만든 뒤, 그 스냅샷에서 `/MT` Release 빌드와 CTest를 수행합니다. `build\distributions\<생성 시각>\`에 Windows x64 실행 ZIP, 소스 ZIP, `SHA256SUMS.csv`, 검증 로그를 남깁니다. 실행 ZIP에는 세 프로그램과 필요한 셰이더·폰트·샘플·실행 안내만 들어갑니다. 로컬 Quinn 캐릭터 내보내기 파일은 포함하지 않으며, Gravity는 박스 캐릭터로 실행됩니다. 스크립트는 ZIP을 저장소 밖의 경로에 풀고 WARP 및 하드웨어 렌더링 smoke 실행까지 확인합니다. 배포 방법과 파일 목록은 [패키지 안내](tools/package/README.md)를 참고하세요.
+## 실측 결과
 
-소스 ZIP을 푼 뒤 Visual Studio 2022 C++ 도구와 Windows SDK가 있는 PC에서 `cmake --preset portable`, `cmake --build --preset portable`, `ctest --preset portable` 순서로 빌드와 테스트를 재현할 수 있습니다. 실행 ZIP은 별도 빌드 도구 없이 `START-HERE.txt`와 `.cmd` 실행기로 시작할 수 있습니다.
+### Raven 장면: Forward/Deferred와 컬링
 
-### 개발 빌드
+2026-10-11, **RTX 4070 Laptop GPU / i9-14900HX**, Release x64, 1920×1080, VSync OFF, D3D11 Debug Layer ON. 같은 카메라에서 조건마다 120프레임 예열 후 300프레임을 수집했습니다. 표의 CPU 제출·GPU 구간·Draw Calls는 중앙값입니다.
+
+| 경로 | 컬링 | CPU 제출 | GPU 구간 | Draw Calls |
+| --- | --- | ---: | ---: | ---: |
+| Forward | OFF | 5.905 ms | 5.919 ms | 1,484 |
+| Forward | ON | 1.777 ms | 2.180 ms | 513 |
+| Deferred | OFF | 4.909 ms | 4.975 ms | 1,485 |
+| Deferred | ON | 1.754 ms | 2.108 ms | 514 |
+
+정적 Scene 메시의 컬링으로 Draw Calls는 두 경로 모두 약 **65.4%** 줄었습니다. GPU 구간 중앙값은 Forward **63.2%**, Deferred **57.6%** 감소했고, CPU 렌더 제출 중앙값도 각각 **69.9%**, **64.3%** 감소했습니다. 조건별 실행은 한 번씩이며 반복 실행 간 변동성은 아직 검증하지 않았습니다. GPU timestamp 구간은 그림자 패스 시작부터 UI 제출 종료까지로 `Present`를 제외합니다. 따라서 이 값은 전체 프레임 시간이나 FPS 개선율이 아닙니다. [원시 CSV와 측정 범위](docs/benchmarks/RavenHardware-2026-10-11.md)
+
+### Job System: glTF CPU 준비
+
+같은 PC의 Release x64에서 Raven GLB를 한 번 파싱한 뒤 primitive 참조를 1·4·16회 사용했습니다. 8개 워커, 모드별 2쌍 예열과 30회 측정, 실행 순서 교대 조건에서 얻은 중앙값입니다.
+
+| Raven 작업 크기 | 순차 | 병렬 | Speedup |
+| --- | ---: | ---: | ---: |
+| 1× · 124,242 vertices | 1.6080 ms | 0.7942 ms | 2.02× |
+| 4× · 496,968 vertices | 6.6125 ms | 1.8412 ms | 3.59× |
+| 16× · 1,987,872 vertices | 27.9521 ms | 6.8457 ms | 4.08× |
+
+작은 fixture의 12 vertices 조건은 순차 **0.0011 ms**, 병렬 **0.0258 ms**로 큐 등록·동기화 비용이 더 컸습니다. 모든 순차·병렬 출력의 fingerprint가 일치했습니다. 측정 구간은 **정점 좌표계 변환과 인덱스 순서 변경**이며 파일 파싱, 텍스처 디코딩, GPU 업로드, 전체 로딩 시간은 포함하지 않습니다. [원시 CSV와 분석](docs/benchmarks/JobSystemHardware-2026-10-11.md)
+
+이전의 WARP 64×64 컬링 진단, 리소스 캐시, 계층 삭제 전후 비교는 [PerformanceEvidence](docs/PerformanceEvidence.md)에 별도로 보관합니다. WARP 수치와 위 실제 GPU 수치를 같은 벤치마크로 합치지 않습니다.
+
+## 데모와 실행
+
+| 실행 파일 | 목적 | 에셋·공개 범위 |
+| --- | --- | --- |
+| `REMIMazeEscape.exe` | Ancient Ruins 3인칭 미로와 엔진 시스템 통합 | 로컬 Ancient Ruins GLB·Quinn 필요 |
+| `REMIRaven.exe` | Soul City에서 Raven PBR·Forward/Deferred·컬링 비교 | 로컬 Soul City·Raven 필요 |
+| `REMIGravity.exe` | 중력 반전 퍼즐 | 공개 기본 실행 패키지에 포함 |
+| `REMIRelay.exe` | 스위치와 제한 시간 게임 | 공개 기본 실행 패키지에 포함 |
+| `REMIVillage.exe` | African Slate Quarry 탐험. 실행 파일 이름은 이전 호환성을 유지 | 로컬 Quarry·Survival Character 필요 |
+| `REMISandbox.exe` | Inspector·정적 에셋 재로드 검증 | 공개 기본 실행 패키지에 포함 |
+
+![Gravity 게임 실제 실행](media/gravity-run-demo.gif)
+
+### 로컬 실행 파일 폴더
+
+`demoexecutionfiles/`는 이 PC에서 만든 **로컬 실행 묶음**입니다. 외부 에셋이 포함되므로 Git에서 제외하며 공개 배포 ZIP과 구분합니다. 파일이 준비되어 있으면 `REMIMazeEscape.exe`, `REMIRaven.exe`, `REMIGravity.exe` 등을 폴더 안에서 바로 실행할 수 있습니다. `Play-MazeEscape.cmd`, `Play-Quarry.cmd` 같은 실행기는 같은 폴더의 상대 경로를 설정합니다.
+
+이미 Release 빌드가 있다면 아래 명령으로 실행 묶음을 갱신할 수 있습니다. `-SkipBuild`는 빌드나 게임 실행을 하지 않고 기존 실행 파일과 필요한 로컬 에셋을 복사합니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\package\build-demoexecutionfiles.ps1 -SkipBuild
+```
+
+### Visual Studio에서 빌드
+
+Windows 10/11 x64, Visual Studio 2022의 **C++ 데스크톱 개발** 및 Windows SDK, CMake 3.25 이상이 필요합니다. 먼저 저장소 루트에서 `cmake --preset vs2022-x64`를 실행한 뒤 `build/vs2022-x64/REMI.sln`을 Visual Studio로 엽니다. 구성은 **Release | x64**, 시작 프로젝트는 원하는 게임 대상(`REMIMazeEscape`, `REMIRaven` 등)으로 선택합니다. 게임의 작업 디렉터리는 저장소 루트로 설정되어 있습니다.
 
 ```powershell
 cmake --preset vs2022-x64
-cmake --build --preset debug
-ctest --preset debug
-build\vs2022-x64\bin\Debug\REMIGravity.exe
-build\vs2022-x64\bin\Debug\REMIRelay.exe
+cmake --build --preset release --target REMIMazeEscape REMIRaven
+ctest --preset release
 ```
 
-`WASD` 이동, `Space` 중력 반전, `Q` 재질 프리셋, 우클릭 드래그 카메라 회전, 휠 확대/축소, `Enter` 재시작, `F2` 성능 표시, `F5` 셰이더 재로드, `Esc` 종료입니다. [gravity.project.json](games/gravity/gravity.project.json)에서 셰이더·캐릭터·폰트 경로와 주요 레벨/물리 수치를 바꿀 수 있고 `--project <파일>`로 다른 프로젝트를 실행할 수 있습니다. 파일의 상대 경로는 해당 프로젝트 파일의 폴더를 기준으로 해석합니다. 로컬 캐릭터 에셋이 없으면 박스 캐릭터로 실행됩니다. `--character <파일>`에 `.rmc`, `.gltf`, `.glb`를 지정할 수 있습니다. `--idle-clip <이름> --move-clip <이름>`으로 동작 이름을 선택하며, glTF는 이름이 없으면 Stand/Idle 및 Run/Walk를 찾아 사용합니다. 자세한 임포트 규칙은 [AssetPipeline](docs/AssetPipeline.md)에 있습니다.
+Maze용 경량 GLB는 `tools/assets/prepare_ancient_ruins.py`, Raven 변환은 `tools/assets/import-raven.ps1`, Quarry 변환은 `tools/assets/build-quarry-assets.ps1`로 준비합니다. 원본 에셋은 수정하지 않고 변환 결과만 `build/local-assets/`에 둡니다. [Maze 준비와 조작](docs/MazeEscape.md) · [Raven 변환과 조작](docs/RavenRendering.md) · [glTF/FBX 파이프라인](docs/AssetPipeline.md)
 
-기본 코스 외에 `REMIGravity.exe --level 2`로 같은 엔진·게임 규칙을 재사용한 두 번째 코스를 실행할 수 있습니다. `--project`의 레벨 값을 바탕으로 발판 너비와 천장 높이를 조정합니다. 물리 계산은 엔진 `PhysicsWorld`, 중력 방향 전환은 `GravityControl`, 코인·승패 판정은 게임의 `GravityRules`에 분리했습니다.
+Raven의 `F1`은 계측 오버레이, `F2`는 컬링, `F3`은 Inspector, `F4`는 와이어프레임, `F6`은 Forward/Deferred 전환입니다. Maze에서는 `F1`이 컬링, `F2`가 우측 상단 HUD이며 `F3`·`F4`·`F6`은 동일합니다. 설정·안내 패널은 Noto Sans KR을 사용합니다. Gravity의 별도 HUD는 Pretendard를 사용합니다.
 
-`REMIRelay`는 `WASD` 이동, 우클릭 드래그 카메라, 휠 확대/축소, `Enter` 재시작, `Esc` 종료를 사용합니다. 청록색 스위치를 먼저 밟고 초록색 출구에 가면 성공합니다. 이 게임은 공통 Scene·Physics·Renderer·박스 메시 생성 경로를 사용하지만 자체 레벨 구성과 `RelayRules`를 가집니다. `--smoke --warp`로 자동 경로와 렌더링을 확인할 수 있습니다.
+### 공개 기본 실행 패키지
 
-세 게임의 조작 안내는 화면 오른쪽 위 **설정** 아이콘을 눌렀을 때만 표시됩니다. 안내 패널과 Relay 상태 카드에는 Noto Sans KR을 사용합니다. Gravity의 게임 상태 HUD도 같은 색 계열로 맞췄습니다.
+`tools/package/build-release.ps1`은 소스 스냅샷에서 Release 빌드·CTest·실행 검증을 수행하고 Gravity·Relay·Sandbox를 담은 Windows x64 ZIP을 만듭니다. Maze, Raven, Quarry와 해당 외부 에셋은 이 ZIP에 포함하지 않습니다. 현재 GitHub Release에 업로드된 실행 ZIP은 없습니다. [패키지 생성·구성 안내](tools/package/README.md)
 
-### 로컬 3인칭 포스트아포칼립스 탐험 프로토타입
+## 저장소 구조
 
-실행 파일 이름은 호환성을 위해 `REMIVillage.exe`를 유지하지만 게임 화면과 기본 장면은 **REMI Apocalypse**로 바꿨습니다. 로컬 `FREE_Post_Apocalypse_Survivor_Environment_Kitbash_set-93d57f55`의 건물 FBX와 `Survival_Character-11d20d01`의 캐릭터 FBX를 Blender 5.1로 변환합니다. 건물 하나를 공유 메시로 네 곳에 배치하고 도로·바닥·거친 충돌 프록시를 코드에서 구성합니다.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\build-apocalypse-assets.ps1
-cmake --build --preset release --target REMIVillage
-Play-Apocalypse.cmd
-build\vs2022-x64\bin\Release\REMIVillage.exe --smoke --warp
+```text
+engine/             공통 런타임, Scene, 자원, Renderer, D3D11 RHI
+games/              Maze Escape, Gravity, Relay, Village/Quarry·Raven 데모
+apps/               Sandbox Inspector와 최소 Bootstrap
+shaders/            HLSL 렌더 패스
+assets/fonts/       실행에 필요한 글꼴과 라이선스
+tools/assets/       FBX·Unreal·Ancient Ruins 에셋 변환
+tools/benchmarks/   GPU·Job System 측정 도구
+tools/package/      실행 묶음과 공개 ZIP 생성
+tests/              회귀 테스트와 작은 glTF fixture
+docs/               설계 문서와 측정 원본
+media/              공개 데모 이미지
 ```
 
-`Play-Apocalypse.cmd`는 생성된 GLB가 없으면 변환을 실행하고, exe가 없으면 Release 빌드를 실행합니다. `Play-Village.cmd`도 호환용 별칭으로 남겨뒀습니다. `WASD`는 카메라 방향 기준 이동, `Shift`는 달리기, `Space`는 점프, 마우스 이동은 카메라 회전, 휠은 줌입니다. `Esc`로 커서를 꺼내 오른쪽 위 **설정** 아이콘을 클릭하면 조작 안내가 열립니다. 설정을 닫고 빈 곳을 클릭하면 게임으로 돌아가고, 커서가 나온 상태에서 `Esc`를 한 번 더 누르면 종료합니다. 게임 창에서 다른 창으로 전환해도 커서를 돌려줍니다.
+`build/`, `demoexecutionfiles/`, `versions/`는 Git에서 제외한 로컬 산출물·개발 기록입니다. Ancient Ruins·Quarry·Survival Character 원본은 로컬 폴더에, Raven ZIP은 `Models/`에, Soul City 원본은 별도 Unreal 프로젝트에 있습니다. 이 외부 에셋은 공개 소스·기본 배포 ZIP에 넣지 않습니다. 저장소 코드는 자체 구현이고 `third_party/`와 글꼴은 각 라이선스를 따릅니다.
 
-Survival Character 원본 FBX에는 애니메이션 클립과 실제 텍스처 파일이 들어 있지 않아 변환 도구가 원본 리그에 간단한 `idle`/`run` 동작을 만들고 FBX 재질 색으로 GLB를 내보냅니다. `.glb/.gltf` 또는 기존 `.rmc`를 `--character <파일>`로 지정할 수 있으며 `--no-character`는 박스 캐릭터로 실행합니다.
+## 현재 한계
 
-Apocalypse의 정적 GLB 및 캐릭터 임포트는 최대 8개 워커(기본값: 논리 프로세서 수보다 하나 적게)를 사용하는 `JobSystem`에 primitive별 정점 좌표·인덱스 변환을 분배합니다. 준비된 결과를 모두 받은 뒤 렌더 스레드에서 GPU 메시·텍스처를 만들고 Scene/캐시를 변경합니다. 현재 Job System은 범용 프레임 그래프나 병렬 렌더러가 아닙니다. 작업의 예외는 `future`로 호출자에게 전달되며 풀을 파괴할 때 제출된 작업을 끝낸 뒤 스레드를 합칩니다. 작은 에셋은 Job System 없이 기존 순차 경로도 사용할 수 있습니다. [구현·동기화 경계](docs/Architecture.md)를 참고하세요.
+RHI는 자원·명령·표면 경계를 제공하지만 Shadow Map·G-buffer·GPU query 일부는 D3D11 구현에 묶여 있습니다. Raven은 정적 포즈이며 원본 게임의 피부 SSS, 머리카락 이방성, IBL과 조명을 재현하지 않습니다. glTF 본 스키닝은 CPU 경로이고, Inspector는 저장·Undo가 없는 개발 도구입니다. 다른 GPU나 반복 실행에서의 성능 일반화도 아직 검증하지 않았습니다.
 
-건물은 시각용 정적 메시이고 바닥과 네 건물의 충돌은 수작업 AABB 프록시입니다. 작은 잔해와 건물 내부 충돌은 아직 없습니다. 건물의 어두운 컬러 아틀라스를 기본색 텍스처로 쓰지만 법선 맵·완전한 PBR 조명은 지원하지 않아 원본 외형과 차이가 있습니다. 원본 FBX와 변환된 GLB는 저장소 및 배포 ZIP에 포함하지 않으며, 이 외부 에셋이 필요한 `REMIVillage`도 배포 ZIP 대상에서 제외했습니다.
-
-두 게임은 `SceneRenderSession`으로 렌더러·메시 캐시 수명과 그림자/색상 패스 조립을 공유합니다. 각 게임의 카메라, HUD, 애니메이션과 규칙은 별도 코드에 남겨 두었습니다.
-
-Release/AddressSanitizer 빌드, Blender 변환 과정과 에셋 형식은 아래 기술 문서에 정리했습니다. 기본 실행 파일 외에 `REMISandbox` 렌더링·물리 데모와 `REMIBootstrap` 최소 실행 검증 앱이 있습니다.
-
-## 기술 문서
-
-- [Architecture](docs/Architecture.md) — 모듈 관계, 프레임 루프, 장면·리소스·캐릭터 경계
-- [RenderingPipeline](docs/RenderingPipeline.md) — DirectX 11 초기화, 좌표 변환, 컬링, 그림자·색상 패스, 계측
-- [ShaderImplementation](docs/ShaderImplementation.md) — HLSL 조명 수식, 재질 변수와 시각 품질의 한계
-- [MemoryManagement](docs/MemoryManagement.md) — 객체 소유권, 핸들 무효화, 종료·누수 검증
-- [AssetPipeline](docs/AssetPipeline.md) — glTF/GLB, 텍스처·재질 파일, 정적 장면·본 애니메이션 사용법과 제한
-- [PerformanceEvidence](docs/PerformanceEvidence.md) — 컬링·캐시 비교, 계층 삭제 개선, 에셋 수명·실패 복구 검증
-
-## Sandbox Inspector와 정적 에셋 재로드
-
-```powershell
-build\vs2022-x64\bin\Debug\REMISandbox.exe --inspector --static-gltf tests\fixtures\static_triangle.glb
-```
-
-`F3`으로 Inspector를 열고 닫는다. 편집 중에는 시뮬레이션이 멈춘다. `↑/↓`로 엔티티 선택, `Ctrl+방향키`로 로컬 X/Y 이동, `Shift+←/→`로 Z 이동, 우클릭·휠로 카메라를 조정한다. 편집은 메모리에만 적용되며 저장·undo는 없다. `F5`는 지정한 정적 glTF를 다시 읽는다. 실패하면 이전 GPU 자원을 유지한다.
-
-`StaticGltfCache`는 여러 Scene에 같은 MeshHandle을 배치하고, Scene 해제와 에셋 제거를 분리한다. 같은 모델 안의 공통 이미지는 GPU 텍스처를 공유한다. 재로드는 primitive 수를 유지하는 정적 모델을 대상으로 한다.
-
-![Sandbox Scene Inspector](media/scene-inspector.png)
-
-코드의 출발점은 `engine/include/remi/`, `engine/src/`, `shaders/Basic.hlsl`, `games/gravity/`입니다. 현재 버전은 **0.11.0**입니다.
+더 자세한 구현 근거는 [ShaderImplementation](docs/ShaderImplementation.md), [AssetPipeline](docs/AssetPipeline.md), [PortfolioBenchmarks](docs/PortfolioBenchmarks.md)를 참고하세요.

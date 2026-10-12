@@ -1,4 +1,7 @@
 add_executable(CoreTests CoreTests.cpp)
+add_executable(MaterialGraphTests MaterialGraphTests.cpp)
+target_link_libraries(MaterialGraphTests PRIVATE REMI::Renderer remi_build_options)
+add_test(NAME Rendering.MaterialGraphGC COMMAND MaterialGraphTests)
 add_executable(JobSystemTests JobSystemTests.cpp)
 target_link_libraries(JobSystemTests PRIVATE REMI::Core remi_build_options)
 add_test(NAME Core.JobSystem COMMAND JobSystemTests)

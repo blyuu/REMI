@@ -1,3 +1,6 @@
 add_executable(REMIBenchmarks main.cpp)
 target_link_libraries(REMIBenchmarks PRIVATE REMI::Renderer REMI::Resources REMI::Platform remi_build_options)
 set_target_properties(REMIBenchmarks PROPERTIES FOLDER "Tools")
+add_executable(REMIGltfPrepBenchmark gltf-preparation.cpp)
+target_link_libraries(REMIGltfPrepBenchmark PRIVATE REMI::Assets remi_build_options)
+set_target_properties(REMIGltfPrepBenchmark PROPERTIES FOLDER "Tools")
